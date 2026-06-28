@@ -112,7 +112,7 @@ def parse_global(argv: list[str], provider_factory: ProviderFactory | None = Non
 def _handle_init(context: CommandContext) -> dict[str, Any]:
     if context.dry_run:
         return ok(
-            {"artifactRoot": str(context.root), "created": [], "plannedActions": ["create artifact root", "create promoted, archived, exports, and assets directories", "write config.yml if missing"]},
+            {"artifactRoot": str(context.root), "created": [], "plannedActions": ["create artifact root", "create promoted, archived, and experiment directories", "write config.yml if missing"]},
             [f"forge experiment new idx-m1-soros-reversal --root {context.root} --json"],
             "dry-run",
         )

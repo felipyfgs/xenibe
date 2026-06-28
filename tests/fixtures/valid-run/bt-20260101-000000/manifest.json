@@ -1,7 +1,11 @@
 {
   "createdAt": "2026-01-01T00:00:00+00:00",
+  "bestCandidate": "candidate-000001",
   "experiment": "valid-experiment",
   "mode": "backtest",
   "runId": "bt-20260101-000000",
+  "searchState": "target-hit",
+  "skippedDuplicates": 0,
+  "winnerCandidate": "candidate-000001",
   "status": "completed"
 }

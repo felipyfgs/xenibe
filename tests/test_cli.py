@@ -36,8 +36,10 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0, response)
             self.assertEqual(response["status"][0]["code"], "created")
             self.assertEqual(response["data"]["artifactRoot"], str(root))
-            self.assertEqual({Path(path).name for path in response["data"]["created"]}, {"promoted", "archived", "exports", "assets", "config.yml"})
+            self.assertEqual({Path(path).name for path in response["data"]["created"]}, {"promoted", "archived", "experiment", "config.yml"})
             self.assertTrue((root / "config.yml").exists())
+            self.assertFalse((root / "assets").exists())
+            self.assertFalse((root / "exports").exists())
             self.assertEqual(
                 load_yaml(root / "config.yml"),
                 {
@@ -46,12 +48,11 @@ class CliTests(unittest.TestCase):
                     "contexts": {
                         "promoted": {"path": "promoted"},
                         "archived": {"path": "archived"},
-                        "exports": {"path": "exports"},
-                        "assets": {"path": "assets"},
+                        "experiment": {"path": "experiment"},
                     },
                 },
             )
-            for filename in ("experiment.yml", "ingest.yml", "searchscope.yml", "risk.yml", "provider.yml", "report.yml"):
+            for filename in ("experiment.yml", "ingest.yml", "search-scope.yml", "risk.yml", "provider.yml", "report.yml"):
                 self.assertFalse((root / filename).exists())
             self.assertEqual(list(root.rglob("*.py")), [])
 
@@ -90,7 +91,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["experiment", "validate", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
             code, response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--root", str(root), "--run-id", "bt-20260101-000000"])
-            run_dir = root / "idx-m1-soros-reversal" / "runs" / "bt-20260101-000000"
+            run_dir = root / "experiment" / "idx-m1-soros-reversal" / "runs" / "bt-20260101-000000"
             self.assertTrue((run_dir / "scoreboard.json").exists())
             self.assertTrue((run_dir / "rounds.jsonl").exists())
             self.assertTrue((run_dir / "reflections.jsonl").exists())

@@ -1,7 +1,10 @@
 {
   "resolvedLimits": {
+    "batch-size": 1,
     "max-candidates": 1,
-    "max-seconds": 60
+    "max-rounds": 1,
+    "max-seconds": 60,
+    "stagnation-rounds": 1
   },
   "runId": "bt-20260101-000000"
 }

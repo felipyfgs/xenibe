@@ -1,26 +1,42 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from typing import Any
 
-from xenibe.artifacts.store import utc_now, write_json
+from xenibe.artifacts.store import experiment_dir, utc_now
 from xenibe.provider import ProviderError
 
 from forge.common import normalize_record, safe_provider_message
 from forge.context import CommandContext
 
 
-def _history_path(root: Path, asset: str, timeframe: str, start: str, end: str) -> Path:
+def _history_path(root: Path, experiment: str, asset: str, timeframe: str, start: str, end: str) -> Path:
     safe_asset = asset.replace("/", "-")
     safe_start = start.replace(":", "").replace("/", "-")
     safe_end = end.replace(":", "").replace("/", "-")
-    return root / "assets" / "history" / safe_asset / timeframe / f"{safe_start}_{safe_end}.json"
+    return experiment_dir(root, experiment) / "data" / f"{safe_asset}_{timeframe}_{safe_start}_{safe_end}.csv"
 
 
-def download(context: CommandContext, asset: str, timeframe: str, start: str, end: str) -> dict[str, Any]:
-    path = _history_path(context.root, asset, timeframe, start, end)
+def _write_csv(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = ["time", "asset", "timeframe", "open", "high", "low", "close"]
+    extras = sorted({key for record in records for key in record} - set(ordered))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[*ordered, *extras])
+        writer.writeheader()
+        for record in records:
+            writer.writerow(record)
+
+
+def download(context: CommandContext, experiment: str, asset: str, timeframe: str, start: str, end: str) -> dict[str, Any]:
+    base = experiment_dir(context.root, experiment)
+    if not base.exists():
+        return {"error": "missing-artifact", "message": "experiment not found"}
+    path = _history_path(context.root, experiment, asset, timeframe, start, end)
     if context.dry_run:
         return {
+            "experiment": experiment,
             "asset": asset,
             "timeframe": timeframe,
             "from": start,
@@ -42,6 +58,7 @@ def download(context: CommandContext, asset: str, timeframe: str, start: str, en
     mode = str(getattr(provider, "mode", "live"))
     normalized = [normalize_record(candle) for candle in candles or []]
     payload = {
+        "experiment": experiment,
         "asset": asset,
         "timeframe": timeframe,
         "from": start,
@@ -50,7 +67,6 @@ def download(context: CommandContext, asset: str, timeframe: str, start: str, en
         "mode": mode,
         "downloadedAt": utc_now(),
         "candleCount": len(normalized),
-        "candles": normalized,
     }
-    write_json(path, payload)
-    return {key: value for key, value in payload.items() if key != "candles"} | {"path": str(path)}
+    _write_csv(path, normalized)
+    return payload | {"path": str(path)}

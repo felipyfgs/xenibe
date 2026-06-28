@@ -1,3 +1,3 @@
-from xenibe.metrics.summary import summarize_trades
+from xenibe.metrics.summary import calculate_trade_metrics, summarize_trades
 
-__all__ = ["summarize_trades"]
+__all__ = ["calculate_trade_metrics", "summarize_trades"]

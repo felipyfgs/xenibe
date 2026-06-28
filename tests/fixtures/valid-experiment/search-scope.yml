@@ -1,0 +1,39 @@
+schema-version: 1
+flow:
+  - context
+  - regime
+  - volatility
+  - structure
+  - setup
+  - trigger
+  - confirmation
+  - decision
+limits:
+  max-candidates: 3
+  max-seconds: 60
+  batch-size: 2
+  max-rounds: 2
+  stagnation-rounds: 2
+components:
+  context: []
+  regime: []
+  volatility: []
+  structure: []
+  setup: []
+  trigger:
+    - type: momentum-close
+      parameters:
+        body-min-atr:
+          - 0.1
+        side:
+          - call
+  confirmation: []
+  decision:
+    - type: weighted-score
+      parameters:
+        min-score:
+          - 1.0
+        entry:
+          - next-candle-open
+        expiration-candles:
+          - 1

@@ -37,6 +37,6 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
             return fail("missing-name", "experiment name required", ["forge experiment list --json"])
         result = service.validate(context.root, args[1])
         if not result["valid"]:
-            return fail("invalid-artifact", "experiment validation failed", [f"fix artifacts under {context.root / args[1]}"], {"issues": result["issues"]})
+            return fail("invalid-artifact", "experiment validation failed", [f"fix reported artifacts under {context.root / 'experiment' / args[1]}", f"forge experiment validate {args[1]} --root {context.root} --json"], {"issues": result["issues"]})
         return ok(result, [f"forge run backtest {args[1]} --root {context.root} --json"], "validated")
     return fail("unknown-command", f"unknown experiment command: {command}", ["forge experiment list --json"])

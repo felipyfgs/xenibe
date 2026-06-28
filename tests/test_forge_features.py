@@ -71,7 +71,7 @@ class ForgeFeatureTests(unittest.TestCase):
             self.assertEqual(run_cli(["run", "backtest", "idx-m1-soros-reversal", "--run-id", "bt-20260101-000000", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["run", "backtest", "idx-m1-soros-reversal", "--run-id", "bt-20260101-000001", "--root", str(root)])[0], 0)
 
-            metrics_path = root / "idx-m1-soros-reversal" / "runs" / "bt-20260101-000000" / "metrics.json"
+            metrics_path = root / "experiment" / "idx-m1-soros-reversal" / "runs" / "bt-20260101-000000" / "metrics.json"
             before = metrics_path.read_text(encoding="utf-8")
             code, response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--run-id", "bt-20260101-000000", "--root", str(root)])
             self.assertNotEqual(code, 0)
@@ -100,10 +100,12 @@ class ForgeFeatureTests(unittest.TestCase):
         provider_factory = MockProvider
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
             assets_code, assets_response = run_cli(["assets", "list", "--root", str(root)], provider_factory=provider_factory)
             payout_code, payout_response = run_cli(["payout", "get", "EURUSD", "--root", str(root)], provider_factory=provider_factory)
             history_code, history_response = run_cli(
-                ["history", "download", "EURUSD", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-02", "--root", str(root)],
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-02", "--root", str(root)],
                 provider_factory=provider_factory,
             )
             history_path_exists = Path(history_response["data"]["path"]).exists()

@@ -4,13 +4,13 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from xenibe.artifacts.store import utc_now, write_yaml
+from xenibe.artifacts.store import experiment_dir, utc_now, write_yaml
 
 from forge.common import relative_files
 
 
 def archive_experiment(root: Path, experiment: str, dry_run: bool = False) -> dict[str, Any]:
-    source = root / experiment
+    source = experiment_dir(root, experiment)
     if not source.exists():
         return {"error": "missing-artifact", "message": "experiment not found"}
     timestamp = utc_now().replace(":", "").replace("+", "z")

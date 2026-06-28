@@ -8,6 +8,7 @@ from typing import Any
 from xenibe.artifacts.store import append_jsonl, complete_run, ensure_run_artifacts
 from xenibe.candles import Candle
 from xenibe.execution import Order, Signal, Trade
+from xenibe.metrics.summary import calculate_trade_metrics
 from xenibe.risk import RiskManager
 
 Strategy = Callable[[Sequence[Candle], int], Signal | dict[str, Any] | None]
@@ -127,18 +128,7 @@ def run_m1_backtest(
         )
         equity.append({"settleIndex": trade.settle_index, **risk_state})
 
-    wins = sum(1 for trade in trades if trade["result"] == "WIN")
-    losses = sum(1 for trade in trades if trade["result"] == "LOSS")
-    refunds = sum(1 for trade in trades if trade["result"] == "REFUND")
-    total = len(trades)
-    metrics = {
-        "total-trades": total,
-        "wins": wins,
-        "losses": losses,
-        "refunds": refunds,
-        "win-rate": wins / total if total else 0.0,
-        "net-profit": sum(float(trade["profit"]) for trade in trades),
-    }
+    metrics = calculate_trade_metrics(trades)
     return {"signals": signals, "orders": orders, "trades": trades, "blocks": blocks, "equity": equity, "metrics": metrics}
 
 

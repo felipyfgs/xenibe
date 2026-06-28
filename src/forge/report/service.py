@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from xenibe.artifacts.store import load_json
+from xenibe.artifacts.store import experiment_dir, load_json
 
 from forge.common import load_metrics
 
 
 def _run_dir(root: Path, experiment: str, run_id: str) -> Path:
-    return root / experiment / "runs" / run_id
+    return experiment_dir(root, experiment) / "runs" / run_id
 
 
 def generate(root: Path, experiment: str, run_id: str, dry_run: bool = False) -> dict[str, Any]:

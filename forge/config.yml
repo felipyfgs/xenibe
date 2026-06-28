@@ -1,0 +1,10 @@
+schema-version: 1
+artifact:
+  root: /root/dev/xenibe/forge
+contexts:
+  promoted:
+    path: promoted
+  archived:
+    path: archived
+  experiment:
+    path: experiment
