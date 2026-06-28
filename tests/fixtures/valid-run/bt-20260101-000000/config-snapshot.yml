@@ -1,0 +1,4 @@
+experiment:
+  name: valid-experiment
+risk:
+  stop-loss: 100

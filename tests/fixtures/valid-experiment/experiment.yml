@@ -1,0 +1,7 @@
+name: valid-experiment
+hypothesis: Previous candle direction can provide a simple M1 baseline.
+target:
+  metric: win-rate
+  operator: '>='
+  value: 0.6
+stop-on-target: true

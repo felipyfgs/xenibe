@@ -1,0 +1,19 @@
+limits:
+  max-candidates: 3
+  max-seconds: 60
+components:
+  indicators:
+    - type: sma
+      parameters:
+        period:
+          - 3
+  filters:
+    - type: trend
+      parameters:
+        direction:
+          - up
+  triggers:
+    - type: engulfing
+      parameters:
+        side:
+          - call

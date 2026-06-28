@@ -1,0 +1,16 @@
+stop-loss: 100
+stop-win: 150
+min-payout: 0.75
+balance: 1000
+stake:
+  stop-loss-divisor: 10
+  min: 1
+  max: 25
+max-open-risk: 25
+soros:
+  enabled: true
+  levels: 2
+martingale:
+  enabled: false
+  max-steps: 0
+  multiplier: 2

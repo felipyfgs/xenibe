@@ -1,0 +1,7 @@
+name: Invalid_Experiment
+bad_key: true
+target:
+  metric: win-rate
+  operator: '>='
+  value: 0.6
+  extra: invalid
