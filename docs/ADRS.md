@@ -449,7 +449,7 @@ Nesse ponto, o agente deve:
 
 - analisar o scoreboard atual;
 - registrar uma decisão em `reflections.jsonl`;
-- atualizar `state.json`;
+- atualizar `manifest.json`;
 - decidir a próxima ação.
 
 Ações possíveis:
@@ -466,5 +466,81 @@ Ações possíveis:
 
 - O tamanho do batch pode ser decidido dinamicamente pelo agente.
 - Cada decisão agentica fica auditável.
-- O run pode ser pausado e retomado a partir de `state.json`.
+- O run pode ser pausado e retomado a partir do estado atual registrado em `manifest.json`.
+- `manifest.json` pode ser atualizado enquanto o run está ativo.
+- Após o run ser concluído, `manifest.json` também se torna imutável.
 - `nextActions` do CLI deve orientar o agente a continuar, refletir, promover ou diagnosticar.
+
+## ADR 017 - Target único e scoreboard amplo
+
+### Status
+
+Aceita.
+
+### Contexto
+
+O Forge precisa saber quando parar a busca, mas também precisa entender quais candidates, indicadores, gatilhos, filtros e componentes price action performaram melhor. Guardar todos os dados brutos de todas as simulações seria caro e desnecessário.
+
+### Decisão
+
+Separar duas responsabilidades:
+
+- `target` em `experiment.yml`: métrica única que decide a parada do run.
+- `scoreboard.json`: campeonato amplo com ranking de candidates, métricas e componentes de análise.
+
+O `scoreboard.json` deve medir:
+
+- ranking dos candidates;
+- contribuição dos indicadores;
+- contribuição dos gatilhos;
+- contribuição dos filtros;
+- contribuição dos padrões de vela;
+- contribuição dos contextos de mercado;
+- métricas agregadas relevantes para decisão.
+
+### Consequências
+
+- O run para por uma regra simples e objetiva.
+- O agente tem visão geral para decidir refinamento.
+- Não é necessário persistir todos os sinais, ordens e trades de todos os candidates.
+- Detalhes completos devem ser salvos apenas quando forem necessários para `approved`, `winner`, debug ou auditoria.
+
+## ADR 018 - Persistência seletiva em vez de logs completos
+
+### Status
+
+Aceita.
+
+### Contexto
+
+A busca pode gerar muitas simulações. Persistir todos os candles, sinais, ordens, trades e logs detalhados para cada candidate aumenta custo e dificulta leitura.
+
+### Decisão
+
+O Forge deve persistir por padrão apenas dados necessários para decisão, comparação e retomada.
+
+Persistência padrão:
+
+- `manifest.json`;
+- `config-snapshot.yml`;
+- `inputs.json`;
+- `candidates.jsonl` com resumo leve por candidate;
+- `scoreboard.json`;
+- `rounds.jsonl`;
+- `reflections.jsonl`;
+- `metrics.json`;
+- `report.md`.
+
+Detalhes completos de trades, sinais e diagnósticos devem ser persistidos apenas para:
+
+- `approved`;
+- `winner`;
+- modo debug;
+- auditoria explícita.
+
+### Consequências
+
+- Menos armazenamento.
+- Scoreboard vira o principal artefato de decisão.
+- Candidates ruins ainda deixam rastros suficientes por métricas e classificação.
+- O sistema precisa definir claramente quais métricas mínimas entram no resumo de candidate.

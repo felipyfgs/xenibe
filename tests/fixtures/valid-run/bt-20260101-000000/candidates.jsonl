@@ -1,1 +1,1 @@
-{"candidateId":"candidate-000001","components":[],"metrics":{"win-rate":1.0},"parameters":{},"status":"target-hit"}
+{"candidateId":"candidate-000001","classification":"winner","components":[],"metrics":{"net-profit":8.0,"win-rate":1.0},"parameters":{},"reason":"target-hit","riskState":{"balance":1008.0,"martingaleStep":0,"netProfit":8.0,"sorosLevel":1},"status":"target-hit"}

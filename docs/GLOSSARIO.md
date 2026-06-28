@@ -32,6 +32,10 @@ Pasta `/root/dev/xenibe/forge`. Contém apenas artefatos operacionais, experimen
 
 Arquivo que define a busca de dados históricos. Deve conter ativo, timeframe, início, fim, provider, fonte e regras de validação do histórico.
 
+## `manifest.json`
+
+Arquivo principal do run. Funciona como índice dos artefatos e checkpoint oficial do estado atual enquanto o run está ativo. Após conclusão do run, torna-se imutável.
+
 ## Lookahead bias
 
 Erro de backtest em que a estratégia usa dados que não estariam disponíveis no momento real da decisão.
@@ -51,6 +55,18 @@ Experimento ou run considerado bom o suficiente para virar referência operacion
 ## Promoção autônoma
 
 Ação em que o agente promove um run sem confirmação humana quando a meta objetiva de `experiment.yml` é atingida.
+
+## Reflection point
+
+Ponto obrigatório após cada batch de candidates em que o agente analisa o scoreboard, registra uma decisão em `reflections.jsonl`, atualiza `manifest.json` e decide a próxima ação.
+
+## Scoreboard
+
+Artefato `scoreboard.json` que funciona como campeonato do run. Mede ranking de candidates e desempenho agregado de indicadores, gatilhos, filtros, padrões e demais componentes price action.
+
+## Target
+
+Métrica única em `experiment.yml` usada como critério objetivo de parada. Diferente do scoreboard, que pode conter várias métricas de análise.
 
 ## Run
 

@@ -30,11 +30,11 @@ forge/<nome-descritivo-do-experimento>/
     manifest.json
     config-snapshot.yml
     candidates.jsonl
+    scoreboard.json
+    rounds.jsonl
+    reflections.jsonl
     metrics.json
-    trades.jsonl
-    signals.jsonl
-    blocks.jsonl
-    equity.jsonl
+    report.md
 ```
 
 ### Papéis dos YAMLs principais
@@ -56,6 +56,12 @@ Regras:
 - antes de executar, os limites resolvidos devem ser gravados no run;
 - a busca deve parar quando o primeiro `candidate` atingir a meta definida em `experiment.yml`;
 - a meta deve ser uma métrica única, objetiva, mensurável e verificável;
+- o `scoreboard.json` deve funcionar como campeonato amplo do run;
+- o scoreboard deve ranquear candidates e componentes de análise price action;
+- candidates devem ser executados em batches;
+- após cada batch deve existir um reflection point obrigatório;
+- cada reflection point deve atualizar `manifest.json` e registrar decisão em `reflections.jsonl`;
+- o sistema deve persistir detalhes completos apenas quando necessário para `approved`, `winner`, debug ou auditoria explícita;
 - todo comando JSON deve retornar `nextActions` para orientar o próximo passo do agente.
 
 Exemplos de limites resolvidos:
@@ -166,7 +172,7 @@ Bloquear novas entradas quando:
 - saldo disponível for insuficiente;
 - houver ordem pendente que impeça novo ciclo.
 
-Todo bloqueio deve ser registrado em `blocks.jsonl` dentro do run.
+Todo bloqueio relevante deve aparecer no resumo do candidate, no scoreboard ou nos detalhes completos quando o candidate for `approved`, `winner`, debug ou auditoria explícita.
 
 ## Soros
 
@@ -232,10 +238,9 @@ forge/
         config-snapshot.yml
         inputs.json
         candidates.jsonl
-        signals.jsonl
-        trades.jsonl
-        blocks.jsonl
-        equity.jsonl
+        scoreboard.json
+        rounds.jsonl
+        reflections.jsonl
         metrics.json
         report.md
 ```
@@ -249,7 +254,7 @@ forge/
 - Definir formato de `experiment.yml`, `ingest.yml`, `searchscope.yml` e `runs/<run-id>/`.
 - Definir fluxo de promoção e arquivamento.
 - Definir contratos esperados nos artefatos JSON/YAML/JSONL.
-- Registrar backtests, simulações, métricas e bloqueios de forma auditável.
+- Registrar backtests, simulações, métricas, rankings e motivos de rejeição de forma auditável.
 - Referenciar provider `pyebinex` por configuração, sem código dentro de `forge`.
 - Referenciar estratégias por nome, módulo externo ou identificador, sem implementar código dentro de `forge`.
 
@@ -276,7 +281,7 @@ forge/
 - Backtest M1 não usa candle atual nem futuro na decisão.
 - Entrada simulada acontece somente na próxima vela.
 - Resultado simulado é calculado no fechamento da próxima vela.
-- Relatórios mostram trades, métricas, equity, motivo de bloqueios e configuração usada.
+- Relatórios mostram métricas, ranking, winner, candidates relevantes, motivos de rejeição e configuração usada.
 - Gestão bloqueia entradas ao atingir Stop Loss ou Stop Win.
 - Soros reseta corretamente após loss.
 - Martingale não opera se desativado.
@@ -297,7 +302,7 @@ forge/
 
 1. Ajustar a documentação para tratar `forge/` como pasta de artefatos.
 2. Definir schema de `experiment.yml`, `ingest.yml` e `searchscope.yml`.
-3. Definir schema de `manifest.json`, `metrics.json`, `signals.jsonl`, `trades.jsonl` e `blocks.jsonl`.
+3. Definir schema de `manifest.json`, `scoreboard.json`, `metrics.json`, `candidates.jsonl`, `rounds.jsonl` e `reflections.jsonl`.
 4. Confirmar regra real de empate na Ebinex.
 5. Confirmar preço oficial usado como entrada na operação M1.
 6. Implementar a lógica em `src/forge` e `src/xenibe`.

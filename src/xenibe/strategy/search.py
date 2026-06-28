@@ -47,6 +47,79 @@ def generate_candidates(searchscope: dict[str, Any], limits: dict[str, Any] | No
     return candidates
 
 
+def classify_candidate(metrics: dict[str, float], target: dict[str, Any]) -> tuple[str, str]:
+    if target_satisfied(metrics, target):
+        return "winner", "target-hit"
+    if float(metrics.get("net-profit", 0.0)) > 0:
+        return "approved", "positive-net-profit"
+    return "rejected", "target-not-hit"
+
+
+def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metric: str) -> dict[str, Any]:
+    ranked = sorted(
+        candidates,
+        key=lambda candidate: (
+            float(candidate.get("metrics", {}).get(target_metric, 0.0)),
+            float(candidate.get("metrics", {}).get("net-profit", 0.0)),
+        ),
+        reverse=True,
+    )
+    candidate_rows = [
+        {
+            "rank": index,
+            "candidateId": candidate["candidateId"],
+            "classification": candidate.get("classification", "rejected"),
+            "status": candidate.get("status", "tested"),
+            "metrics": candidate.get("metrics", {}),
+        }
+        for index, candidate in enumerate(ranked, start=1)
+    ]
+    components: dict[tuple[str, str], dict[str, Any]] = {}
+    for candidate in candidates:
+        metrics = candidate.get("metrics", {})
+        for component in candidate.get("components", []):
+            key = (str(component.get("role", "unknown")), str(component.get("type", "unknown")))
+            row = components.setdefault(
+                key,
+                {
+                    "componentId": f"{key[0]}:{key[1]}",
+                    "role": key[0],
+                    "type": key[1],
+                    "tested": 0,
+                    "winners": 0,
+                    "targetMetricTotal": 0.0,
+                    "netProfitTotal": 0.0,
+                },
+            )
+            row["tested"] += 1
+            row["winners"] += 1 if candidate.get("classification") == "winner" else 0
+            row["targetMetricTotal"] += float(metrics.get(target_metric, 0.0))
+            row["netProfitTotal"] += float(metrics.get("net-profit", 0.0))
+    component_rows = []
+    for row in components.values():
+        tested = int(row["tested"])
+        component_rows.append(
+            {
+                "componentId": row["componentId"],
+                "role": row["role"],
+                "type": row["type"],
+                "tested": tested,
+                "winners": row["winners"],
+                "avgTargetMetric": row["targetMetricTotal"] / tested if tested else 0.0,
+                "avgNetProfit": row["netProfitTotal"] / tested if tested else 0.0,
+            }
+        )
+    component_rows.sort(key=lambda row: (float(row["avgTargetMetric"]), float(row["avgNetProfit"])), reverse=True)
+    for rank, row in enumerate(component_rows, start=1):
+        row["rank"] = rank
+    return {
+        "runId": run_id,
+        "targetMetric": target_metric,
+        "rankings": {"candidates": candidate_rows},
+        "components": component_rows,
+    }
+
+
 def target_satisfied(metrics: dict[str, float], target: dict[str, Any]) -> bool:
     metric = str(target["metric"])
     if metric not in metrics:

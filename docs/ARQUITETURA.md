@@ -154,15 +154,14 @@ forge/
         config-snapshot.yml
         inputs.json
         candidates.jsonl
-        candles.sample.jsonl
-        signals.jsonl
-        orders.jsonl
-        trades.jsonl
-        blocks.jsonl
-        equity.jsonl
+        scoreboard.json
+        rounds.jsonl
+        reflections.jsonl
         metrics.json
         report.md
-        logs.jsonl
+        details/
+          approved/
+          winner/
 ```
 
 ## Responsabilidade de cada item
@@ -182,15 +181,14 @@ forge/
 | `manifest.json` | Índice do run, comandos executados, timestamps e versões. |
 | `config-snapshot.yml` | Snapshot completo da configuração usada no run. |
 | `inputs.json` | Entradas resolvidas, como ativo, payout, banca, período e limites dinâmicos escolhidos pelo agente. |
-| `candidates.jsonl` | Possibilidades testadas, com componentes de análise, parâmetros, status e métricas parciais. |
-| `signals.jsonl` | Sinais gerados com `decisionTime` e `visibleUntil`. |
-| `orders.jsonl` | Ordens planejadas, enviadas ou simuladas. |
-| `trades.jsonl` | Resultados finais das operações. |
-| `blocks.jsonl` | Entradas bloqueadas e seus motivos. |
-| `equity.jsonl` | Evolução da banca e PnL. |
+| `candidates.jsonl` | Resumo leve de cada candidate testado, com estratégia, componentes, classificação, status, métricas e motivo. |
+| `scoreboard.json` | Campeonato amplo do run, com ranking de candidates e desempenho agregado dos componentes price action. |
+| `rounds.jsonl` | Histórico dos batches executados no run. |
+| `reflections.jsonl` | Decisões do agente após cada reflection point. |
 | `metrics.json` | Métricas finais do run. |
 | `report.md` | Relatório legível do run. |
-| `logs.jsonl` | Logs estruturados da execução. |
+| `details/approved/` | Detalhes completos apenas de candidates aprovados quando necessário. |
+| `details/winner/` | Detalhes completos do candidate vencedor. |
 | `promoted/` | Experimentos ou runs promovidos para referência operacional. |
 | `archived/` | Experimentos encerrados, movidos com data e manifesto de arquivamento. |
 
@@ -230,10 +228,13 @@ Código em src/forge e src/xenibe
 7. Risco aprova ou rejeita entrada.
 8. Ordem aprovada é agendada para a próxima vela.
 9. Liquidação ocorre no fechamento da próxima vela.
-10. O run grava eventos em `signals.jsonl`, `orders.jsonl`, `trades.jsonl` e `blocks.jsonl`.
-11. Se um `candidate` atingir a meta de `experiment.yml`, a busca para.
-12. Métricas finais são gravadas em `metrics.json` e `report.md`.
-13. O run concluído fica imutável.
+10. O run grava resumo leve de candidates em `candidates.jsonl`.
+11. O run atualiza `scoreboard.json` com ranking de candidates e componentes.
+12. Após cada batch, o agente registra reflexão em `reflections.jsonl` e atualiza `manifest.json`.
+13. Se um `candidate` atingir a meta de `experiment.yml`, a busca para.
+14. Métricas finais são gravadas em `metrics.json` e `report.md`.
+15. Detalhes completos são gravados apenas para `approved`, `winner`, debug ou auditoria explícita.
+16. O run concluído fica imutável.
 
 ## Fluxo de execução real futura
 

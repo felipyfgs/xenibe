@@ -1,0 +1,19 @@
+{
+  "components": [],
+  "rankings": {
+    "candidates": [
+      {
+        "candidateId": "candidate-000001",
+        "classification": "winner",
+        "metrics": {
+          "net-profit": 8.0,
+          "win-rate": 1.0
+        },
+        "rank": 1,
+        "status": "target-hit"
+      }
+    ]
+  },
+  "runId": "bt-20260101-000000",
+  "targetMetric": "win-rate"
+}

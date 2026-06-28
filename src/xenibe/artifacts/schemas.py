@@ -14,11 +14,9 @@ RUN_ARTIFACTS = (
     "config-snapshot.yml",
     "inputs.json",
     "candidates.jsonl",
-    "signals.jsonl",
-    "orders.jsonl",
-    "trades.jsonl",
-    "blocks.jsonl",
-    "equity.jsonl",
+    "scoreboard.json",
+    "rounds.jsonl",
+    "reflections.jsonl",
     "metrics.json",
     "report.md",
 )
@@ -35,11 +33,17 @@ EXPERIMENT_REQUIRED_KEYS = {
 RUN_JSON_REQUIRED_KEYS = {
     "manifest.json": ("runId", "experiment", "mode", "status", "createdAt"),
     "inputs.json": ("runId", "resolvedLimits"),
+    "scoreboard.json": ("runId", "rankings", "components"),
     "metrics.json": ("runId", "status", "metrics"),
 }
 
 RUN_JSONL_FILES = (
     "candidates.jsonl",
+    "rounds.jsonl",
+    "reflections.jsonl",
+)
+
+DETAIL_JSONL_FILES = (
     "signals.jsonl",
     "orders.jsonl",
     "trades.jsonl",
@@ -50,7 +54,11 @@ RUN_JSONL_FILES = (
 VALID_STATUS_CODES = {
     "ok",
     "created",
+    "dry-run",
     "validated",
+    "missing-command",
+    "missing-name",
+    "unknown-command",
     "missing-artifact",
     "invalid-artifact",
     "invalid-name",
@@ -67,10 +75,13 @@ VALID_STATUS_CODES = {
     "open-risk-exceeded",
     "cutoff-closed",
     "provider-connection-failed",
+    "provider-unavailable",
+    "provider-error",
     "provider-order-rejected",
     "provider-asset-closed",
     "provider-low-payout",
     "provider-settlement-timeout",
+    "unexpected-error",
 }
 
 DEFAULT_EXPERIMENT = {

@@ -239,15 +239,14 @@ forge/<experimento>/runs/<run-id>/
   config-snapshot.yml
   inputs.json
   candidates.jsonl
-  candles.sample.jsonl
-  signals.jsonl
-  orders.jsonl
-  trades.jsonl
-  blocks.jsonl
-  equity.jsonl
+  scoreboard.json
+  rounds.jsonl
+  reflections.jsonl
   metrics.json
   report.md
-  logs.jsonl
+  details/
+    approved/
+    winner/
 ```
 
 ### `forge run simulate <experimento>`
@@ -568,9 +567,9 @@ management:
   "artifacts": [
     "config-snapshot.yml",
     "candidates.jsonl",
-    "signals.jsonl",
-    "trades.jsonl",
-    "blocks.jsonl",
+    "scoreboard.json",
+    "rounds.jsonl",
+    "reflections.jsonl",
     "metrics.json",
     "report.md"
   ]
@@ -606,7 +605,7 @@ management:
 - Criar um `run-id` novo para cada execução.
 - Nunca sobrescrever um run existente.
 - Sempre gravar `config-snapshot.yml`.
-- Sempre registrar bloqueios em `blocks.jsonl`.
+- Sempre registrar motivo de rejeição no resumo do candidate ou nos detalhes de candidates relevantes.
 - Promover somente runs auditáveis.
 - Arquivar experimentos encerrados em `forge/archived/`.
 - Usar `--json` em automações.

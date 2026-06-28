@@ -16,6 +16,7 @@ from xenibe.artifacts.schemas import (
     DEFAULT_REPORT,
     DEFAULT_RISK,
     DEFAULT_SEARCHSCOPE,
+    DETAIL_JSONL_FILES,
     EXPERIMENT_FILES,
     EXPERIMENT_REQUIRED_KEYS,
     RUN_ARTIFACTS,
@@ -84,11 +85,25 @@ def init_artifact_root(root: Path) -> list[Path]:
     created: list[Path] = []
     for name in ("promoted", "archived", "exports", "assets"):
         path = root / name
+        missing = not path.exists()
         path.mkdir(exist_ok=True)
-        created.append(path)
+        if missing:
+            created.append(path)
     config = root / "config.yml"
     if not config.exists():
-        write_yaml(config, {"artifact-root": str(root), "schema-version": 1})
+        write_yaml(
+            config,
+            {
+                "schema-version": 1,
+                "artifact": {"root": str(root)},
+                "contexts": {
+                    "promoted": {"path": "promoted"},
+                    "archived": {"path": "archived"},
+                    "exports": {"path": "exports"},
+                    "assets": {"path": "assets"},
+                },
+            },
+        )
         created.append(config)
     return created
 
@@ -186,6 +201,30 @@ def validate_jsonl(path: Path) -> list[ValidationIssue]:
     return issues
 
 
+def validate_candidate_record(record: dict[str, Any], path: str) -> list[ValidationIssue]:
+    issues: list[ValidationIssue] = []
+    required = ("candidateId", "components", "parameters", "classification", "status", "metrics")
+    for key in required:
+        if key not in record:
+            issues.append(ValidationIssue("invalid-artifact", path, f"candidate missing key {key}"))
+    classification = record.get("classification")
+    if classification is not None and classification not in {"rejected", "approved", "winner"}:
+        issues.append(ValidationIssue("invalid-artifact", path, "candidate classification must be rejected, approved, or winner"))
+    return issues
+
+
+def validate_candidates_jsonl(path: Path) -> list[ValidationIssue]:
+    issues = validate_jsonl(path)
+    if issues:
+        return issues
+    with path.open("r", encoding="utf-8") as handle:
+        for index, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            issues.extend(validate_candidate_record(json.loads(line), f"{path}:{index}"))
+    return issues
+
+
 def validate_run_dir(path: Path) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not is_run_id(path.name):
@@ -212,7 +251,13 @@ def validate_run_dir(path: Path) -> list[ValidationIssue]:
                 continue
             for key_path in find_non_kebab_keys(data):
                 issues.append(ValidationIssue("invalid-name", f"{file_path}:{key_path}", "snapshot YAML keys must use kebab-case"))
+        elif filename == "candidates.jsonl":
+            issues.extend(validate_candidates_jsonl(file_path))
         elif filename in RUN_JSONL_FILES:
+            issues.extend(validate_jsonl(file_path))
+    for filename in DETAIL_JSONL_FILES:
+        file_path = path / filename
+        if file_path.exists():
             issues.extend(validate_jsonl(file_path))
     return issues
 
@@ -235,6 +280,7 @@ def ensure_run_artifacts(run_dir: Path, run_id: str, experiment: str, mode: str,
     write_json(run_dir / "manifest.json", {"runId": run_id, "experiment": experiment, "mode": mode, "status": "running", "createdAt": utc_now()})
     write_yaml(run_dir / "config-snapshot.yml", snapshot)
     write_json(run_dir / "inputs.json", {"runId": run_id, **inputs})
+    write_json(run_dir / "scoreboard.json", {"runId": run_id, "rankings": {"candidates": []}, "components": []})
     for filename in RUN_JSONL_FILES:
         (run_dir / filename).touch()
 
