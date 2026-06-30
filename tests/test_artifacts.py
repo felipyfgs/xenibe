@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from xenibe.artifacts.history import file_sha256
 from xenibe.artifacts.store import (
     ImmutableRunError,
     append_scope_revision,
@@ -15,6 +16,7 @@ from xenibe.artifacts.store import (
     validate_config,
     validate_experiment_dir,
     validate_run_dir,
+    write_json,
     write_yaml,
 )
 
@@ -108,6 +110,44 @@ class ArtifactValidationTests(unittest.TestCase):
 
         self.assertIn(str(experiment / "ingest.yml") + ":data.path", {issue.path for issue in issues})
 
+    def test_canonical_history_manifest_and_active_legacy_csv_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_experiment(root, "idx-m1-soros-reversal")
+            experiment = root / "experiment" / "idx-m1-soros-reversal"
+            csv_path = experiment / "data" / "EURUSD_M1.csv"
+            csv_path.write_text("time,asset,timeframe,open,high,low,close\n2026-01-01T00:00:00Z,EURUSD,M1,1,2,1,2\n", encoding="utf-8")
+            write_json(
+                experiment / "data" / "EURUSD_M1.manifest.json",
+                {
+                    "asset": "EURUSD",
+                    "timeframe": "M1",
+                    "requestedRange": {"from": "2026-01-01", "to": "2026-01-02"},
+                    "coverageRange": {"from": "2026-01-01", "to": "2026-01-02"},
+                    "path": "data/EURUSD_M1.csv",
+                    "candleCount": 1,
+                    "sha256": file_sha256(csv_path),
+                    "provider": "fixture",
+                    "providerMode": "test",
+                    "downloadedAt": "2026-01-01T00:00:00Z",
+                },
+            )
+            ingest = load_yaml(experiment / "ingest.yml")
+            ingest["data"]["path"] = "data/EURUSD_M1.csv"
+            write_yaml(experiment / "ingest.yml", ingest)
+
+            valid_issues = validate_experiment_dir(experiment)
+
+            legacy_path = experiment / "data" / "EURUSD_M1_2026-01-01_2026-01-02.csv"
+            legacy_path.write_text(csv_path.read_text(encoding="utf-8"), encoding="utf-8")
+            ingest["data"]["path"] = "data/EURUSD_M1_2026-01-01_2026-01-02.csv"
+            write_yaml(experiment / "ingest.yml", ingest)
+            legacy_issues = validate_experiment_dir(experiment)
+
+        self.assertEqual(valid_issues, [])
+        self.assertIn(str(experiment / "ingest.yml") + ":data.path", {issue.path for issue in legacy_issues})
+        self.assertTrue(any("data/EURUSD_M1.csv" in issue.message for issue in legacy_issues))
+
     def test_search_scope_semantic_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -137,6 +177,84 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn(str(experiment / "search-scope.yml") + ":components.trigger[1].parameters.side[0]", paths)
         self.assertIn(str(experiment / "search-scope.yml") + ":components.trigger[1].parameters.unknown", paths)
         self.assertIn(str(experiment / "search-scope.yml") + ":components.decision", paths)
+
+    def test_horizon_validation_config_and_required_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_experiment(root, "idx-m1-soros-reversal")
+            experiment = root / "experiment" / "idx-m1-soros-reversal"
+            csv_path = experiment / "data" / "EURUSD_M1.csv"
+            csv_path.write_text("time,asset,timeframe,open,high,low,close\n2026-01-01T00:00:00Z,EURUSD,M1,1,2,1,2\n", encoding="utf-8")
+            write_json(
+                experiment / "data" / "EURUSD_M1.manifest.json",
+                {
+                    "asset": "EURUSD",
+                    "timeframe": "M1",
+                    "requestedRange": {"from": "2026-01-01", "to": "2026-01-31"},
+                    "coverageRange": {"from": "2026-01-01", "to": "2026-01-31"},
+                    "path": "data/EURUSD_M1.csv",
+                    "candleCount": 1,
+                    "sha256": file_sha256(csv_path),
+                    "provider": "fixture",
+                    "providerMode": "test",
+                    "downloadedAt": "2026-01-01T00:00:00Z",
+                },
+            )
+            ingest = load_yaml(experiment / "ingest.yml")
+            ingest["data"]["path"] = "data/EURUSD_M1.csv"
+            ingest["data"]["from"] = "2026-01-01"
+            ingest["data"]["to"] = "2026-01-31"
+            write_yaml(experiment / "ingest.yml", ingest)
+            scope = load_yaml(experiment / "search-scope.yml")
+            scope["horizon-validation"] = {
+                "enabled": True,
+                "primary-window-days": 7,
+                "days": [3, 7, 15],
+                "min-trades-per-hour": 0.2,
+                "min-sufficient-horizons": 3,
+                "gate": {"mode": "min-sufficient", "target-source": "experiment-target", "require-positive-net-profit": True},
+            }
+            write_yaml(experiment / "search-scope.yml", scope)
+
+            valid_issues = validate_experiment_dir(experiment)
+
+            scope["horizon-validation"]["days"] = [0]
+            write_yaml(experiment / "search-scope.yml", scope)
+            invalid_config_issues = validate_experiment_dir(experiment)
+            scope["horizon-validation"]["days"] = [3, 7, 15]
+            write_yaml(experiment / "search-scope.yml", scope)
+            manifest = load_yaml(experiment / "ingest.yml")
+            self.assertEqual(manifest["data"]["path"], "data/EURUSD_M1.csv")
+            write_json(
+                experiment / "data" / "EURUSD_M1.manifest.json",
+                {
+                    "asset": "EURUSD",
+                    "timeframe": "M1",
+                    "requestedRange": {"from": "2026-01-20", "to": "2026-01-31"},
+                    "coverageRange": {"from": "2026-01-20", "to": "2026-01-31"},
+                    "path": "data/EURUSD_M1.csv",
+                    "candleCount": 1,
+                    "sha256": file_sha256(csv_path),
+                    "provider": "fixture",
+                    "providerMode": "test",
+                    "downloadedAt": "2026-01-20T00:00:00Z",
+                },
+            )
+            coverage_issues = validate_experiment_dir(experiment)
+
+        self.assertEqual(valid_issues, [])
+        self.assertIn(str(experiment / "search-scope.yml") + ":horizon-validation.days[0]", {issue.path for issue in invalid_config_issues})
+        self.assertTrue(any(issue.path.endswith("EURUSD_M1.manifest.json:coverageRange") for issue in coverage_issues))
+
+    def test_horizons_jsonl_is_validated_as_optional_detail_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "bt-20260101-000000"
+            shutil.copytree(FIXTURES / "valid-run" / "bt-20260101-000000", run_dir)
+            (run_dir / "horizons.jsonl").write_text("{bad-json\n", encoding="utf-8")
+
+            issues = validate_run_dir(run_dir)
+
+        self.assertTrue(any(issue.code == "invalid-jsonl" and "horizons.jsonl" in issue.path for issue in issues))
 
     def test_legacy_searchscope_without_canonical_file_reports_migration_issue(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,7 +1,0 @@
-name: robo-LKSJDLKKL
-hypothesis: Price action pattern can produce a measurable M1 edge.
-target:
-  metric: win-rate
-  operator: '>='
-  value: 0.6
-stop-on-target: true

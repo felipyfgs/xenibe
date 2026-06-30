@@ -3,3 +3,5 @@
 _stude/
 openspec/
 .codex/
+.env
+.venv/

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Forge experiment lab for Xenibe Ebinex research"
 requires-python = ">=3.11"
 dependencies = [
+  "ebinex @ git+https://github.com/felipyfgs/pyebinex",
   "PyYAML>=6.0",
 ]
 

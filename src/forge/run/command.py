@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from forge.common import option_value
+from forge.common import dry_status, parse_options, result_error
 from forge.context import CommandContext
 from forge.responses import fail, ok
 
@@ -14,15 +14,20 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
         return fail("missing-command", "run command required", ["forge run list <experiment> --json"])
     command = args[0]
     if command in {"backtest", "simulate"}:
-        if len(args) < 2:
+        parsed = parse_options(args[1:], {"--run-id"})
+        if parsed.missing_value is not None:
+            return fail("missing-name", f"{parsed.missing_value} requires a value", [f"forge run {command} <experiment> {parsed.missing_value} <value> --json"])
+        if not parsed.positionals:
             return fail("missing-name", "experiment name required", ["forge experiment list --json"])
-        result = service.run_backtest(context.root, args[1], "simulate" if command == "simulate" else "backtest", option_value(args, "--run-id"), context.dry_run)
-        if "error" in result:
-            return fail(str(result["error"]), str(result["message"]), [f"forge experiment validate {args[1]} --root {context.root} --json"], {"issues": result.get("issues", [])})
+        experiment = parsed.positionals[0]
+        result = service.run_backtest(context.root, experiment, "simulate" if command == "simulate" else "backtest", parsed.options.get("--run-id"), context.dry_run)
+        error = result_error(result)
+        if error is not None:
+            return fail(error[0], error[1], [f"forge experiment validate {experiment} --root {context.root} --json"], {"issues": result.get("issues", [])})
         return ok(
             result,
-            [f"forge run show {args[1]} {result['runId']} --root {context.root} --json", f"forge promote run {args[1]} {result['runId']} --root {context.root} --json"],
-            "dry-run" if context.dry_run else "created",
+            [f"forge run show {experiment} {result['runId']} --root {context.root} --json", f"forge promote run {experiment} {result['runId']} --root {context.root} --json"],
+            dry_status(context.dry_run),
         )
     if command == "list":
         if len(args) < 2:
@@ -32,8 +37,9 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
         if len(args) < 3:
             return fail("missing-name", "experiment and run id required", ["forge run list <experiment> --json"])
         result = service.show_run(context.root, args[1], args[2])
-        if "error" in result:
-            return fail(str(result["error"]), str(result["message"]), [f"forge run list {args[1]} --root {context.root} --json"])
+        error = result_error(result)
+        if error is not None:
+            return fail(error[0], error[1], [f"forge run list {args[1]} --root {context.root} --json"])
         return ok(result, [f"forge report show {args[1]} {args[2]} --root {context.root} --json"])
     if command == "validate":
         if len(args) < 3:

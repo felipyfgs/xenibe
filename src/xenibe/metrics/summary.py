@@ -2,6 +2,41 @@ from __future__ import annotations
 
 from typing import Any
 
+METRIC_TOTAL_TRADES = "total-trades"
+METRIC_WINS = "wins"
+METRIC_LOSSES = "losses"
+METRIC_REFUNDS = "refunds"
+METRIC_WIN_RATE = "win-rate"
+METRIC_NET_PROFIT = "net-profit"
+METRIC_MAX_DRAWDOWN = "max-drawdown"
+METRIC_PROFIT_FACTOR = "profit-factor"
+METRIC_EXPECTANCY = "expectancy"
+METRIC_MAX_WIN_STREAK = "max-win-streak"
+METRIC_MAX_LOSS_STREAK = "max-loss-streak"
+METRIC_AVERAGE_TRADE_RETURN = "average-trade-return"
+METRIC_AVERAGE_PAYOFF = "average-payoff"
+
+PUBLIC_METRIC_NAMES = {
+    METRIC_TOTAL_TRADES: "totalTrades",
+    METRIC_WINS: "wins",
+    METRIC_LOSSES: "losses",
+    METRIC_REFUNDS: "refunds",
+    METRIC_WIN_RATE: "winRate",
+    METRIC_NET_PROFIT: "netProfit",
+    METRIC_MAX_DRAWDOWN: "maxDrawdown",
+    METRIC_PROFIT_FACTOR: "profitFactor",
+    METRIC_EXPECTANCY: "expectancy",
+    METRIC_MAX_WIN_STREAK: "maxWinStreak",
+    METRIC_MAX_LOSS_STREAK: "maxLossStreak",
+    METRIC_AVERAGE_TRADE_RETURN: "averageTradeReturn",
+    METRIC_AVERAGE_PAYOFF: "averagePayoff",
+}
+
+
+def metrics_to_public(metrics: dict[str, Any], keys: tuple[str, ...] | None = None) -> dict[str, Any]:
+    selected = keys or tuple(PUBLIC_METRIC_NAMES)
+    return {PUBLIC_METRIC_NAMES[key]: metrics.get(key) for key in selected if key in PUBLIC_METRIC_NAMES}
+
 
 def calculate_trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(trades)
@@ -38,36 +73,21 @@ def calculate_trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     average_win = gross_profit / wins if wins else 0.0
     average_loss = gross_loss / losses if losses else 0.0
     return {
-        "total-trades": total,
-        "wins": wins,
-        "losses": losses,
-        "refunds": refunds,
-        "win-rate": wins / total if total else 0.0,
-        "net-profit": net_profit,
-        "max-drawdown": max_drawdown,
-        "profit-factor": gross_profit / gross_loss if gross_loss else (gross_profit if gross_profit else 0.0),
-        "expectancy": net_profit / total if total else 0.0,
-        "max-win-streak": max_win_streak,
-        "max-loss-streak": max_loss_streak,
-        "average-trade-return": net_profit / total if total else 0.0,
-        "average-payoff": average_win / average_loss if average_loss else (average_win if average_win else 0.0),
+        METRIC_TOTAL_TRADES: total,
+        METRIC_WINS: wins,
+        METRIC_LOSSES: losses,
+        METRIC_REFUNDS: refunds,
+        METRIC_WIN_RATE: wins / total if total else 0.0,
+        METRIC_NET_PROFIT: net_profit,
+        METRIC_MAX_DRAWDOWN: max_drawdown,
+        METRIC_PROFIT_FACTOR: gross_profit / gross_loss if gross_loss else (gross_profit if gross_profit else 0.0),
+        METRIC_EXPECTANCY: net_profit / total if total else 0.0,
+        METRIC_MAX_WIN_STREAK: max_win_streak,
+        METRIC_MAX_LOSS_STREAK: max_loss_streak,
+        METRIC_AVERAGE_TRADE_RETURN: net_profit / total if total else 0.0,
+        METRIC_AVERAGE_PAYOFF: average_win / average_loss if average_loss else (average_win if average_win else 0.0),
     }
 
 
 def summarize_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    metrics = calculate_trade_metrics(trades)
-    return {
-        "totalTrades": metrics["total-trades"],
-        "wins": metrics["wins"],
-        "losses": metrics["losses"],
-        "refunds": metrics["refunds"],
-        "winRate": metrics["win-rate"],
-        "netProfit": metrics["net-profit"],
-        "maxDrawdown": metrics["max-drawdown"],
-        "profitFactor": metrics["profit-factor"],
-        "expectancy": metrics["expectancy"],
-        "maxWinStreak": metrics["max-win-streak"],
-        "maxLossStreak": metrics["max-loss-streak"],
-        "averageTradeReturn": metrics["average-trade-return"],
-        "averagePayoff": metrics["average-payoff"],
-    }
+    return metrics_to_public(calculate_trade_metrics(trades))

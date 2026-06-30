@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,5 +35,9 @@ class CommandContext:
 
     def provider(self) -> Any:
         if self.provider_factory is None:
+            if os.environ.get("EBINEX_EMAIL") and (os.environ.get("EBINEX_PASSWORD") or os.environ.get("EBINEX_PASS")):
+                from xenibe.provider import EbinexProvider
+
+                return EbinexProvider()
             return OfflineProvider()
         return self.provider_factory()

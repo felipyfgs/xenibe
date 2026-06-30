@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from forge.common import dry_status, result_error
 from forge.context import CommandContext
 from forge.responses import fail, ok
 
@@ -16,12 +17,13 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
         if len(args) < 2:
             return fail("missing-name", "experiment name required", ["forge experiment new idx-m1-soros-reversal --json"])
         result = service.create(context.root, args[1], context.dry_run)
-        if "error" in result:
-            return fail(str(result["error"]), str(result["message"]), result.get("next"))
+        error = result_error(result)
+        if error is not None:
+            return fail(error[0], error[1], result.get("next"))
         return ok(
             result,
             [f"forge experiment validate {args[1]} --root {context.root} --json", f"forge run backtest {args[1]} --root {context.root} --json"],
-            "dry-run" if context.dry_run else "created",
+            dry_status(context.dry_run),
         )
     if command == "list":
         return ok(service.list_all(context.root), ["forge experiment show <name> --json"])

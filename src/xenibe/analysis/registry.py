@@ -5,6 +5,7 @@ from typing import Any
 
 from xenibe.analysis.context import AnalysisContext
 from xenibe.analysis.result import Evaluation, failed, passed, unavailable
+from xenibe.artifacts.schemas import canonical_role
 from xenibe.candles import Candle
 
 
@@ -299,8 +300,6 @@ def evaluate_weighted_score(ctx: AnalysisContext, params: dict[str, Any], role: 
 EVALUATORS: dict[tuple[str, str], Evaluator] = {
     ("regime", "trend"): evaluate_trend,
     ("regime", "range"): evaluate_range,
-    ("regimes", "trend"): evaluate_trend,
-    ("regimes", "range"): evaluate_range,
     ("volatility", "atr-normalized"): evaluate_atr_normalized,
     ("volatility", "candle-anomaly-filter"): evaluate_candle_anomaly,
     ("structure", "support-resistance-zone"): evaluate_support_resistance,
@@ -309,30 +308,21 @@ EVALUATORS: dict[tuple[str, str], Evaluator] = {
     ("setup", "trend-pullback"): evaluate_trend_pullback,
     ("setup", "breakout-retest"): evaluate_breakout_retest,
     ("setup", "sr-reversal"): evaluate_sr_reversal,
-    ("setups", "trend-pullback"): evaluate_trend_pullback,
-    ("setups", "breakout-retest"): evaluate_breakout_retest,
-    ("setups", "sr-reversal"): evaluate_sr_reversal,
     ("trigger", "engulfing"): evaluate_engulfing,
     ("trigger", "pinbar-rejection"): evaluate_pinbar,
     ("trigger", "momentum-close"): evaluate_momentum_close,
-    ("triggers", "engulfing"): evaluate_engulfing,
-    ("triggers", "pinbar-rejection"): evaluate_pinbar,
-    ("triggers", "momentum-close"): evaluate_momentum_close,
     ("confirmation", "multi-timeframe-alignment"): evaluate_mtf_alignment,
     ("confirmation", "rsi-zone"): evaluate_rsi_zone,
-    ("confirmations", "multi-timeframe-alignment"): evaluate_mtf_alignment,
-    ("confirmations", "rsi-zone"): evaluate_rsi_zone,
     ("decision", "weighted-score"): evaluate_weighted_score,
-    ("decision-rules", "weighted-score"): evaluate_weighted_score,
 }
 
 
 def get_evaluator(role: str, component_type: str) -> Evaluator | None:
-    return EVALUATORS.get((role, component_type))
+    return EVALUATORS.get((canonical_role(role), component_type))
 
 
 def evaluate_component(ctx: AnalysisContext, component: dict[str, Any]) -> Evaluation:
-    role = str(component.get("role", ""))
+    role = canonical_role(component.get("role", ""))
     component_type = str(component.get("type", ""))
     evaluator = get_evaluator(role, component_type)
     if evaluator is None:
@@ -341,4 +331,4 @@ def evaluate_component(ctx: AnalysisContext, component: dict[str, Any]) -> Evalu
 
 
 def supported_component(role: str, component_type: str) -> bool:
-    return (role, component_type) in EVALUATORS
+    return (canonical_role(role), component_type) in EVALUATORS

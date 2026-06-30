@@ -8,6 +8,25 @@ from xenibe.execution import Signal
 from xenibe.risk import RiskManager
 
 
+def session_risk_config(**overrides):
+    config = {
+        "stop-loss": 15,
+        "stop-win": 20,
+        "min-payout": 0.75,
+        "balance": 100,
+        "stake": {"stop-loss-divisor": 3, "min": 1, "max": 100},
+        "max-open-risk": 100,
+        "soros": {"enabled": True, "levels": 1},
+        "martingale": {"enabled": False, "max-steps": 0, "multiplier": 2},
+    }
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            config[key] = {**config[key], **value}
+        else:
+            config[key] = value
+    return config
+
+
 def candles_for_tests() -> list[Candle]:
     return [
         Candle("2026-01-01T00:00:00Z", 1.0, 1.2, 0.9, 1.1),
@@ -56,25 +75,137 @@ class BacktestTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["result"], "REFUND")
         self.assertEqual(result["trades"][0]["profit"], 0.0)
 
-    def test_soros_resets_after_loss_and_martingale_disabled_by_default(self) -> None:
-        manager = RiskManager(
-            {
-                "stop-loss": 100,
-                "stop-win": 150,
-                "min-payout": 0.75,
-                "balance": 1000,
-                "stake": {"stop-loss-divisor": 10, "min": 1, "max": 25},
-                "max-open-risk": 25,
-                "soros": {"enabled": True, "levels": 2},
-                "martingale": {"enabled": False, "max-steps": 0, "multiplier": 2},
-            }
-        )
+    def test_session_starts_from_signal_and_calculates_percentage_stops_and_stake(self) -> None:
+        manager = RiskManager(session_risk_config())
 
-        manager.settle("WIN", 10, 8)
-        self.assertEqual(manager.state.soros_level, 1)
-        manager.settle("LOSS", 10, -10)
+        decision = manager.preflight(payout=0.8)
+
+        self.assertTrue(decision.approved)
+        self.assertEqual(manager.state.session_id, 1)
+        self.assertTrue(manager.state.session_active)
+        self.assertEqual(manager.state.session_start_balance, 100)
+        self.assertEqual(manager.state.session_stop_loss, 15)
+        self.assertEqual(manager.state.session_stop_win, 20)
+        self.assertEqual(manager.state.session_stake_divisor, 3)
+        self.assertEqual(decision.stake, 5)
+
+    def test_stake_divisor_defaults_to_three_when_missing(self) -> None:
+        config = session_risk_config(stake={"min": 1, "max": 100})
+        del config["stake"]["stop-loss-divisor"]
+        manager = RiskManager(config)
+
+        decision = manager.preflight(payout=0.8)
+
+        self.assertTrue(decision.approved)
+        self.assertEqual(decision.stake, 5)
+        self.assertEqual(manager.state.session_stake_divisor, 3)
+
+    def test_invalid_stake_divisor_is_rejected(self) -> None:
+        manager = RiskManager(session_risk_config(stake={"stop-loss-divisor": 0}))
+
+        decision = manager.preflight(payout=0.8)
+
+        self.assertFalse(decision.approved)
+        self.assertEqual(decision.code, "invalid-risk-config")
+
+    def test_soros_n1_uses_base_plus_previous_profit_and_then_resets_after_win(self) -> None:
+        manager = RiskManager(session_risk_config())
+        base_decision = manager.preflight(payout=0.8)
+        manager.settle("WIN", base_decision.stake, 4)
+
+        self.assertTrue(manager.state.soros_pending)
+        self.assertEqual(manager.next_stake(), 9)
+
+        soros_decision = manager.preflight(payout=0.8)
+        self.assertTrue(soros_decision.details["sorosActive"])
+        manager.settle("WIN", soros_decision.stake, 7.2)
+
+        self.assertFalse(manager.state.soros_pending)
+        self.assertEqual(manager.next_stake(), 5)
         self.assertEqual(manager.state.soros_level, 0)
+
+    def test_soros_n1_resets_after_loss_and_base_loss_returns_to_base_stake(self) -> None:
+        manager = RiskManager(session_risk_config(martingale={"enabled": True, "max-steps": 3, "multiplier": 2}))
+        first = manager.preflight(payout=0.8)
+        manager.settle("LOSS", first.stake, -first.stake)
+
+        self.assertFalse(manager.state.soros_pending)
+        self.assertEqual(manager.next_stake(), 5)
+
+        second = manager.preflight(payout=0.8)
+        manager.settle("WIN", second.stake, 4)
+        soros = manager.preflight(payout=0.8)
+        manager.settle("LOSS", soros.stake, -soros.stake)
+
+        self.assertFalse(manager.state.soros_pending)
+        self.assertEqual(manager.next_stake(), 5)
         self.assertEqual(manager.state.martingale_step, 0)
+
+    def test_session_resets_after_stop_loss_and_next_signal_starts_independent_session(self) -> None:
+        manager = RiskManager(session_risk_config(soros={"enabled": False}))
+        for _ in range(3):
+            decision = manager.preflight(payout=0.8)
+            state = manager.settle("LOSS", decision.stake, -decision.stake)
+
+        self.assertTrue(state["sessionClosed"])
+        self.assertEqual(state["sessionCloseReason"], "stop-loss-reached")
+        self.assertFalse(manager.state.session_active)
+        self.assertEqual(manager.state.session_net_profit, 0)
+        self.assertFalse(manager.state.soros_pending)
+
+        next_decision = manager.preflight(payout=0.8)
+
+        self.assertTrue(next_decision.approved)
+        self.assertEqual(manager.state.session_id, 2)
+        self.assertEqual(manager.state.session_start_balance, 85)
+        self.assertAlmostEqual(next_decision.stake, 4.25)
+
+    def test_session_resets_after_stop_win(self) -> None:
+        manager = RiskManager(session_risk_config(**{"stop-win": 10}))
+        base = manager.preflight(payout=0.8)
+        manager.settle("WIN", base.stake, 4)
+        soros = manager.preflight(payout=0.8)
+        state = manager.settle("WIN", soros.stake, 7.2)
+
+        self.assertTrue(state["sessionClosed"])
+        self.assertEqual(state["sessionCloseReason"], "stop-win-reached")
+        self.assertFalse(manager.state.session_active)
+        self.assertEqual(manager.state.session_net_profit, 0)
+        self.assertAlmostEqual(manager.next_stake(), 5.56)
+
+    def test_preflight_blocks_trade_that_could_exceed_session_stop_loss(self) -> None:
+        manager = RiskManager(session_risk_config(soros={"enabled": False}))
+        for profit in (-5, 4, -5, -5):
+            decision = manager.preflight(payout=0.8)
+            result = "WIN" if profit > 0 else "LOSS"
+            manager.settle(result, decision.stake, profit)
+
+        decision = manager.preflight(payout=0.8)
+
+        self.assertFalse(decision.approved)
+        self.assertEqual(decision.code, "stop-loss-risk-exceeded")
+        self.assertFalse(manager.state.session_active)
+
+    def test_backtest_continues_after_session_close_and_waits_for_next_signal(self) -> None:
+        candles = [
+            Candle("2026-01-01T00:00:00Z", 1.0, 1.1, 0.9, 1.05),
+            Candle("2026-01-01T00:01:00Z", 1.0, 1.1, 0.9, 1.05),
+            Candle("2026-01-01T00:02:00Z", 1.0, 1.0, 0.8, 0.9),
+            Candle("2026-01-01T00:03:00Z", 1.0, 1.0, 0.8, 0.9),
+            Candle("2026-01-01T00:04:00Z", 1.0, 1.0, 0.8, 0.9),
+            Candle("2026-01-01T00:05:00Z", 1.0, 1.1, 0.9, 1.05),
+            Candle("2026-01-01T00:06:00Z", 1.0, 1.2, 0.9, 1.1),
+        ]
+
+        def strategy(_closed, decision_index):
+            return Signal("call") if decision_index in {1, 2, 3, 5} else None
+
+        result = run_m1_backtest(candles, strategy=strategy, risk_config=session_risk_config(soros={"enabled": False}))
+
+        self.assertEqual([order["decisionIndex"] for order in result["orders"]], [1, 2, 3, 5])
+        self.assertEqual([order["sessionId"] for order in result["orders"]], [1, 1, 1, 2])
+        self.assertEqual(result["orders"][3]["stake"], 4.25)
+        self.assertEqual(result["trades"][2]["sessionCloseReason"], "stop-loss-reached")
 
 
 if __name__ == "__main__":

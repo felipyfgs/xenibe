@@ -11,9 +11,10 @@ from typing import Any
 
 from forge.cli import main
 from forge.context import CommandContext
+from xenibe.artifacts.store import load_json, load_yaml
 
 
-FEATURES = ("archive", "assets", "compare", "experiment", "export", "history", "payout", "promote", "report", "run", "validate")
+FEATURES = ("archive", "assets", "compare", "experiment", "export", "history", "instructions", "payout", "promote", "report", "run", "status", "validate")
 
 
 def run_cli(args: list[str], provider_factory=None) -> tuple[int, dict[str, Any]]:
@@ -37,6 +38,22 @@ class MockProvider:
         return [{"time": start, "asset": asset, "timeframe": timeframe, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1}]
 
 
+class CountingProvider(MockProvider):
+    calls: list[tuple[str, str, str, str]] = []
+
+    def historical_candles(self, asset: str, timeframe: str, start: str, end: str) -> list[dict[str, Any]]:
+        self.calls.append((asset, timeframe, start, end))
+        return [
+            {"time": start, "asset": asset, "timeframe": timeframe, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1},
+            {"time": end, "asset": asset, "timeframe": timeframe, "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.1},
+        ]
+
+
+class ExplodingProvider(MockProvider):
+    def historical_candles(self, asset: str, timeframe: str, start: str, end: str) -> list[dict[str, Any]]:
+        raise AssertionError("provider should not be called")
+
+
 class ForgeFeatureTests(unittest.TestCase):
     def test_feature_packages_import_and_dispatch_missing_command(self) -> None:
         context = CommandContext(root=Path("/tmp/forge-test"))
@@ -58,6 +75,8 @@ class ForgeFeatureTests(unittest.TestCase):
         code, response = run_cli(["--help"])
         self.assertEqual(code, 0)
         self.assertIn("forge assets list", response["data"]["help"])
+        self.assertIn("forge status", response["data"]["help"])
+        self.assertIn("forge instructions orchestrate", response["data"]["help"])
 
         code, response = run_cli(["--version"])
         self.assertEqual(code, 0)
@@ -109,6 +128,9 @@ class ForgeFeatureTests(unittest.TestCase):
                 provider_factory=provider_factory,
             )
             history_path_exists = Path(history_response["data"]["path"]).exists()
+            manifest_path_exists = Path(history_response["data"]["manifestPath"]).exists()
+            ingest = load_yaml(root / "experiment" / "idx-m1-soros-reversal" / "ingest.yml")
+            manifest = load_json(Path(history_response["data"]["manifestPath"]))
 
         self.assertEqual(assets_code, 0)
         self.assertEqual(assets_response["data"]["assets"][0]["id"], "EURUSD")
@@ -117,6 +139,96 @@ class ForgeFeatureTests(unittest.TestCase):
         self.assertEqual(history_code, 0)
         self.assertEqual(history_response["data"]["candleCount"], 1)
         self.assertTrue(history_path_exists)
+        self.assertTrue(manifest_path_exists)
+        self.assertTrue(history_response["data"]["path"].endswith("data/EURUSD_M1.csv"))
+        self.assertEqual(ingest["data"]["path"], "data/EURUSD_M1.csv")
+        self.assertEqual(manifest["path"], "data/EURUSD_M1.csv")
+        self.assertEqual(manifest["requestedRange"], {"from": "2026-01-01", "to": "2026-01-02"})
+
+    def test_history_download_reuses_covered_canonical_without_provider_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
+            first_code, _ = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-10", "--root", str(root)],
+                provider_factory=MockProvider,
+            )
+            second_code, second_response = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-02", "--to", "2026-01-03", "--root", str(root)],
+                provider_factory=ExplodingProvider,
+            )
+            ingest = load_yaml(root / "experiment" / "idx-m1-soros-reversal" / "ingest.yml")
+
+        self.assertEqual(first_code, 0)
+        self.assertEqual(second_code, 0, second_response)
+        self.assertEqual(second_response["data"]["action"], "reuse")
+        self.assertEqual(ingest["data"]["from"], "2026-01-02")
+        self.assertEqual(ingest["data"]["to"], "2026-01-03")
+
+    def test_history_download_expands_conflicts_and_replaces_canonical_ranges(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            CountingProvider.calls = []
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
+            self.assertEqual(
+                run_cli(
+                    ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-02", "--to", "2026-01-03", "--root", str(root)],
+                    provider_factory=CountingProvider,
+                )[0],
+                0,
+            )
+            expand_code, expand_response = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-04", "--root", str(root)],
+                provider_factory=CountingProvider,
+            )
+            conflict_code, conflict_response = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-02-01", "--to", "2026-02-02", "--root", str(root)],
+                provider_factory=CountingProvider,
+            )
+            replace_code, replace_response = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-02-01", "--to", "2026-02-02", "--replace", "--root", str(root)],
+                provider_factory=CountingProvider,
+            )
+
+        self.assertEqual(expand_code, 0, expand_response)
+        self.assertEqual(expand_response["data"]["action"], "expand")
+        self.assertTrue(CountingProvider.calls[1][2].startswith("2026-01-01"))
+        self.assertTrue(CountingProvider.calls[1][3].startswith("2026-01-04"))
+        self.assertNotEqual(conflict_code, 0)
+        self.assertEqual(conflict_response["status"][0]["code"], "replace-required")
+        self.assertEqual(replace_code, 0, replace_response)
+        self.assertEqual(replace_response["data"]["action"], "replace")
+
+    def test_history_download_reports_manifest_conflict_and_dry_run_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
+            self.assertEqual(
+                run_cli(
+                    ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-02", "--root", str(root)],
+                    provider_factory=MockProvider,
+                )[0],
+                0,
+            )
+            manifest_path = root / "experiment" / "idx-m1-soros-reversal" / "data" / "EURUSD_M1.manifest.json"
+            manifest_path.unlink()
+            conflict_code, conflict_response = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-02", "--root", str(root)],
+                provider_factory=MockProvider,
+            )
+            (root / "experiment" / "idx-m1-soros-reversal" / "data" / "EURUSD_M1.csv").unlink()
+            dry_code, dry_response = run_cli(
+                ["history", "download", "EURUSD", "--experiment", "idx-m1-soros-reversal", "--timeframe", "M1", "--from", "2026-01-01", "--to", "2026-01-02", "--root", str(root), "--dry-run"],
+                provider_factory=MockProvider,
+            )
+
+        self.assertNotEqual(conflict_code, 0)
+        self.assertEqual(conflict_response["status"][0]["code"], "canonical-history-conflict")
+        self.assertEqual(dry_code, 0, dry_response)
+        self.assertIn("write canonical CSV", dry_response["data"]["plannedActions"])
 
 
 if __name__ == "__main__":

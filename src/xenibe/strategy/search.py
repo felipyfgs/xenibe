@@ -5,7 +5,8 @@ import json
 from itertools import product
 from typing import Any
 
-from xenibe.artifacts.schemas import CANONICAL_SEARCH_FLOW, LOOP_LIMIT_DEFAULTS
+from xenibe.artifacts.schemas import CANONICAL_SEARCH_FLOW, LOOP_LIMIT_DEFAULTS, canonical_role
+from xenibe.metrics.summary import METRIC_NET_PROFIT
 
 
 def resolve_limits(searchscope: dict[str, Any], default_max_candidates: int = 25) -> dict[str, Any]:
@@ -30,7 +31,7 @@ def normalized_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     components = sorted(
         candidate.get("components", []),
         key=lambda component: (
-            stage_order.get(str(component.get("role")), len(stage_order)),
+            stage_order.get(canonical_role(component.get("role")), len(stage_order)),
             str(component.get("type", "")),
             _fingerprint_payload(component.get("parameters", {})),
         ),
@@ -39,7 +40,7 @@ def normalized_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
         "flow": list(CANONICAL_SEARCH_FLOW),
         "components": [
             {
-                "stage": str(component.get("role", "")),
+                "stage": canonical_role(component.get("role", "")),
                 "type": str(component.get("type", "")),
                 "parameters": component.get("parameters", {}),
             }
@@ -101,19 +102,31 @@ def generate_candidates(searchscope: dict[str, Any], limits: dict[str, Any] | No
 def classify_candidate(metrics: dict[str, float], target: dict[str, Any]) -> tuple[str, str]:
     if target_satisfied(metrics, target):
         return "winner", "target-hit"
-    if float(metrics.get("net-profit", 0.0)) > 0:
+    if float(metrics.get(METRIC_NET_PROFIT, 0.0)) > 0:
         return "approved", "positive-net-profit"
     return "rejected", "target-not-hit"
 
 
 def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metric: str) -> dict[str, Any]:
     candidates = [candidate for candidate in candidates if candidate.get("classification") != "skipped" and candidate.get("status") != "skipped-duplicate"]
+    def ranking_key(candidate: dict[str, Any]) -> tuple[float, float, float, float]:
+        horizon = candidate.get("horizonValidation")
+        gate_rank = 0.0
+        worst_horizon = float("-inf")
+        if isinstance(horizon, dict):
+            gate_rank = 1.0 if horizon.get("status") == "passed" else 0.0
+            if horizon.get("worstHorizonTargetMetric") is not None:
+                worst_horizon = float(horizon.get("worstHorizonTargetMetric", 0.0))
+        return (
+            gate_rank,
+            float(candidate.get("metrics", {}).get(target_metric, 0.0)),
+            float(candidate.get("metrics", {}).get(METRIC_NET_PROFIT, 0.0)),
+            worst_horizon,
+        )
+
     ranked = sorted(
         candidates,
-        key=lambda candidate: (
-            float(candidate.get("metrics", {}).get(target_metric, 0.0)),
-            float(candidate.get("metrics", {}).get("net-profit", 0.0)),
-        ),
+        key=ranking_key,
         reverse=True,
     )
     candidate_rows = [
@@ -125,6 +138,7 @@ def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metri
             "candidateFingerprint": candidate.get("candidateFingerprint"),
             "evaluationFingerprint": candidate.get("evaluationFingerprint"),
             "metrics": candidate.get("metrics", {}),
+            "horizonValidation": candidate.get("horizonValidation"),
         }
         for index, candidate in enumerate(ranked, start=1)
     ]
@@ -132,7 +146,7 @@ def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metri
     for candidate in candidates:
         metrics = candidate.get("metrics", {})
         for component in candidate.get("components", []):
-            key = (str(component.get("role", "unknown")), str(component.get("type", "unknown")))
+            key = (canonical_role(component.get("role", "unknown")), str(component.get("type", "unknown")))
             row = components.setdefault(
                 key,
                 {
@@ -148,7 +162,7 @@ def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metri
             row["tested"] += 1
             row["winners"] += 1 if candidate.get("classification") == "winner" else 0
             row["targetMetricTotal"] += float(metrics.get(target_metric, 0.0))
-            row["netProfitTotal"] += float(metrics.get("net-profit", 0.0))
+            row["netProfitTotal"] += float(metrics.get(METRIC_NET_PROFIT, 0.0))
     component_rows = []
     for row in components.values():
         tested = int(row["tested"])

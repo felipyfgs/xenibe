@@ -3,29 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from xenibe.artifacts.store import experiment_dir
+from xenibe.metrics.summary import METRIC_NET_PROFIT, METRIC_TOTAL_TRADES, METRIC_WIN_RATE, metrics_to_public
 
-from forge.common import load_metrics
+from forge.common import load_metrics, metrics_path, run_dir
+
+
+COMPARISON_METRICS = (METRIC_WIN_RATE, METRIC_NET_PROFIT, METRIC_TOTAL_TRADES)
 
 
 def compare_runs(root: Path, experiment: str, run_ids: list[str]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     missing: list[str] = []
     for run_id in run_ids:
-        run_dir = experiment_dir(root, experiment) / "runs" / run_id
-        metrics_path = run_dir / "metrics.json"
-        if not metrics_path.exists():
+        directory = run_dir(root, experiment, run_id)
+        if not metrics_path(directory).exists():
             missing.append(run_id)
             continue
-        metrics = load_metrics(run_dir)
-        rows.append(
-            {
-                "runId": run_id,
-                "winRate": metrics.get("win-rate"),
-                "netProfit": metrics.get("net-profit"),
-                "totalTrades": metrics.get("total-trades"),
-            }
-        )
+        rows.append({"runId": run_id, **metrics_to_public(load_metrics(directory), COMPARISON_METRICS)})
     if missing:
         return {"error": "missing-artifact", "message": "one or more runs are missing metrics", "missingRuns": missing}
     rows.sort(key=lambda row: (float(row.get("netProfit") or 0.0), float(row.get("winRate") or 0.0)), reverse=True)

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
+from xenibe.risk.defaults import DEFAULT_RISK
+
 EXPERIMENT_FILES = (
     "experiment.yml",
     "ingest.yml",
@@ -43,6 +47,7 @@ DETAIL_JSONL_FILES = (
     "trades.jsonl",
     "blocks.jsonl",
     "equity.jsonl",
+    "horizons.jsonl",
 )
 
 VALID_STATUS_CODES = {
@@ -65,7 +70,13 @@ VALID_STATUS_CODES = {
     "insufficient-balance",
     "stake-out-of-bounds",
     "stop-loss-reached",
+    "stop-loss-risk-exceeded",
     "stop-win-reached",
+    "invalid-risk-config",
+    "canonical-history-conflict",
+    "replace-required",
+    "insufficient-primary-sample",
+    "horizon-validation-failed",
     "open-risk-exceeded",
     "cutoff-closed",
     "provider-connection-failed",
@@ -109,6 +120,13 @@ CANONICAL_SEARCH_FLOW = (
     "confirmation",
     "decision",
 )
+ROLE_ALIASES = {
+    "regimes": "regime",
+    "setups": "setup",
+    "triggers": "trigger",
+    "confirmations": "confirmation",
+    "decision-rules": "decision",
+}
 REQUIRED_SEARCH_STAGES = ("trigger", "decision")
 LOOP_LIMIT_DEFAULTS = {
     "max-candidates": 25,
@@ -215,6 +233,11 @@ COMPONENT_TYPE_REGISTRY = {
     for stage, component_rules in COMPONENT_PARAMETER_RULES.items()
 }
 
+
+def canonical_role(role: Any) -> str:
+    value = str(role)
+    return ROLE_ALIASES.get(value, value)
+
 DEFAULT_EXPERIMENT = {
     "name": "",
     "hypothesis": "Price action pattern can produce a measurable M1 edge.",
@@ -260,17 +283,6 @@ DEFAULT_SEARCHSCOPE = {
         "confirmation": [],
         "decision": [{"type": "weighted-score", "parameters": {"min-score": [1.0], "entry": ["next-candle-open"], "expiration-candles": [1]}}],
     },
-}
-
-DEFAULT_RISK = {
-    "stop-loss": 100.0,
-    "stop-win": 150.0,
-    "min-payout": 0.75,
-    "balance": 1000.0,
-    "stake": {"stop-loss-divisor": 10, "min": 1.0, "max": 25.0},
-    "max-open-risk": 25.0,
-    "soros": {"enabled": True, "levels": 2},
-    "martingale": {"enabled": False, "max-steps": 0, "multiplier": 2.0},
 }
 
 DEFAULT_PROVIDER = {"name": "ebinex", "account": "demo"}

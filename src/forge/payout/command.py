@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from forge.common import dry_status, result_error
 from forge.context import CommandContext
 from forge.responses import fail, ok
 
@@ -18,6 +19,7 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
     else:
         return fail("missing-name", "payout requires asset", ["forge payout get EURUSD --json"])
     result = service.get_payout(context, asset)
-    if "error" in result:
-        return fail(str(result["error"]), str(result["message"]), ["configure provider credentials or inspect provider.yml"], {"asset": asset})
-    return ok(result, [f"forge history download {asset} --timeframe M1 --from <start> --to <end> --json"], "dry-run" if context.dry_run else "ok")
+    error = result_error(result)
+    if error is not None:
+        return fail(error[0], error[1], ["configure provider credentials or inspect provider.yml"], {"asset": asset})
+    return ok(result, [f"forge history download {asset} --timeframe M1 --from <start> --to <end> --json"], dry_status(context.dry_run, "ok"))

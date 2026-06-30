@@ -2,16 +2,28 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
-from xenibe.artifacts.store import append_jsonl, complete_run, ensure_run_artifacts
 from xenibe.candles import Candle
 from xenibe.execution import Order, Signal, Trade
 from xenibe.metrics.summary import calculate_trade_metrics
-from xenibe.risk import RiskManager
+from xenibe.risk import DEFAULT_RISK, RiskManager
 
 Strategy = Callable[[Sequence[Candle], int], Signal | dict[str, Any] | None]
+SESSION_ARTIFACT_FIELDS = (
+    "sessionId",
+    "sessionActive",
+    "sessionStartBalance",
+    "sessionNetProfit",
+    "sessionStopLoss",
+    "sessionStopWin",
+    "sessionBaseStake",
+    "sessionStakeDivisor",
+    "sorosPending",
+    "sorosActive",
+    "sessionClosed",
+    "sessionCloseReason",
+)
 
 
 def default_strategy(closed_candles: Sequence[Candle], decision_index: int) -> Signal | None:
@@ -48,6 +60,10 @@ def settle_binary(side: str, candle: Candle, payout: float, stake: float, tie_po
     return "LOSS", -stake
 
 
+def session_artifact_fields(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {key: snapshot[key] for key in SESSION_ARTIFACT_FIELDS if key in snapshot}
+
+
 def run_m1_backtest(
     candles: Sequence[Candle],
     strategy: Strategy | None = None,
@@ -57,19 +73,7 @@ def run_m1_backtest(
     tie_policy: str = "refund",
 ) -> dict[str, Any]:
     strategy = strategy or default_strategy
-    risk = RiskManager(
-        risk_config
-        or {
-            "stop-loss": 100.0,
-            "stop-win": 150.0,
-            "min-payout": 0.75,
-            "balance": 1000.0,
-            "stake": {"stop-loss-divisor": 10, "min": 1.0, "max": 25.0},
-            "max-open-risk": 25.0,
-            "soros": {"enabled": True, "levels": 2},
-            "martingale": {"enabled": False, "max-steps": 0, "multiplier": 2.0},
-        }
-    )
+    risk = RiskManager(risk_config or DEFAULT_RISK)
     signals: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
@@ -84,8 +88,9 @@ def run_m1_backtest(
         signals.append({"decisionIndex": decision_index, "visibleThroughIndex": decision_index - 1, **asdict(signal)})
         decision = risk.preflight(payout=payout, available_seconds=60 - decision_second)
         if not decision.approved:
-            blocks.append({"decisionIndex": decision_index, "code": decision.code, "reason": decision.reason})
+            blocks.append({"decisionIndex": decision_index, "code": decision.code, "reason": decision.reason, **session_artifact_fields(decision.details)})
             continue
+        order_risk_state = decision.details
         order = Order(
             order_id=f"order-{len(orders) + 1:06d}",
             side=signal.side,
@@ -100,6 +105,7 @@ def run_m1_backtest(
                 "stake": order.stake,
                 "decisionIndex": order.decision_index,
                 "entryIndex": order.entry_index,
+                **session_artifact_fields(order_risk_state),
             }
         )
         result, profit = settle_binary(signal.side, candles[order.entry_index], payout, order.stake, tie_policy)
@@ -124,36 +130,10 @@ def run_m1_backtest(
                 "profit": trade.profit,
                 "entryIndex": trade.entry_index,
                 "settleIndex": trade.settle_index,
+                **session_artifact_fields(risk_state),
             }
         )
         equity.append({"settleIndex": trade.settle_index, **risk_state})
 
     metrics = calculate_trade_metrics(trades)
     return {"signals": signals, "orders": orders, "trades": trades, "blocks": blocks, "equity": equity, "metrics": metrics}
-
-
-def persist_backtest_run(
-    run_dir: Path,
-    run_id: str,
-    experiment: str,
-    snapshot: dict[str, Any],
-    inputs: dict[str, Any],
-    result: dict[str, Any],
-) -> None:
-    ensure_run_artifacts(run_dir, run_id, experiment, "backtest", snapshot, inputs)
-    for name in ("signals", "orders", "trades", "blocks", "equity"):
-        path = run_dir / f"{name}.jsonl"
-        for record in result[name]:
-            append_jsonl(path, record)
-    report = "\n".join(
-        [
-            f"# Run {run_id}",
-            "",
-            f"- Experiment: `{experiment}`",
-            f"- Total trades: {result['metrics']['total-trades']}",
-            f"- Win rate: {result['metrics']['win-rate']:.4f}",
-            f"- Net profit: {result['metrics']['net-profit']:.2f}",
-            "",
-        ]
-    )
-    complete_run(run_dir, result["metrics"], report)

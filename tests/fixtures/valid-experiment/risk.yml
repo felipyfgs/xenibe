@@ -1,15 +1,15 @@
-stop-loss: 100
-stop-win: 150
+stop-loss: 15
+stop-win: 20
 min-payout: 0.75
 balance: 1000
 stake:
-  stop-loss-divisor: 10
+  stop-loss-divisor: 3
   min: 1
-  max: 25
-max-open-risk: 25
+  max: 100
+max-open-risk: 100
 soros:
   enabled: true
-  levels: 2
+  levels: 1
 martingale:
   enabled: false
   max-steps: 0

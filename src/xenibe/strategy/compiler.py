@@ -5,6 +5,7 @@ from dataclasses import asdict
 from typing import Any
 
 from xenibe.analysis import AnalysisContext, Evaluation, evaluate_component, supported_component
+from xenibe.artifacts.schemas import canonical_role
 from xenibe.candles import Candle
 from xenibe.execution import Signal
 
@@ -17,16 +18,16 @@ class UnsupportedComponentError(ValueError):
 
 
 def _decision_components(candidate: dict[str, Any]) -> list[dict[str, Any]]:
-    return [component for component in candidate.get("components", []) if component.get("role") in {"decision", "decision-rules"}]
+    return [component for component in candidate.get("components", []) if canonical_role(component.get("role", "")) == "decision"]
 
 
 def _analysis_components(candidate: dict[str, Any]) -> list[dict[str, Any]]:
-    return [component for component in candidate.get("components", []) if component.get("role") not in {"decision", "decision-rules"}]
+    return [component for component in candidate.get("components", []) if canonical_role(component.get("role", "")) != "decision"]
 
 
 def validate_supported(candidate: dict[str, Any]) -> None:
     for component in candidate.get("components", []):
-        role = str(component.get("role", ""))
+        role = canonical_role(component.get("role", ""))
         component_type = str(component.get("type", ""))
         if not supported_component(role, component_type):
             raise UnsupportedComponentError(role, component_type)

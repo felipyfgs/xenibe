@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from forge.common import dry_status, result_error
 from forge.context import CommandContext
 from forge.responses import fail, ok
 
@@ -18,6 +19,7 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
     else:
         experiment = args[0]
     result = service.archive_experiment(context.root, experiment, context.dry_run)
-    if "error" in result:
-        return fail(str(result["error"]), str(result["message"]), [f"forge experiment list --root {context.root} --json"])
-    return ok(result, ["forge experiment list --json"], "dry-run" if context.dry_run else "created")
+    error = result_error(result)
+    if error is not None:
+        return fail(error[0], error[1], [f"forge experiment list --root {context.root} --json"])
+    return ok(result, ["forge experiment list --json"], dry_status(context.dry_run))

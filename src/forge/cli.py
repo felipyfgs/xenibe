@@ -14,11 +14,13 @@ from forge.context import CommandContext, ProviderFactory
 from forge.experiment import command as experiment_command
 from forge.export import command as export_command
 from forge.history import command as history_command
+from forge.instructions import command as instructions_command
 from forge.payout import command as payout_command
 from forge.promote import command as promote_command
 from forge.report import command as report_command
-from forge.responses import emit, fail, ok
+from forge.responses import attach_metadata, emit, fail, ok
 from forge.run import command as run_command
+from forge.status import command as status_command
 from forge.validate import command as validate_command
 from xenibe.artifacts.store import ImmutableRunError, init_artifact_root
 
@@ -40,6 +42,8 @@ Global options:
 Commands:
   forge init
   forge validate
+  forge status
+  forge instructions orchestrate
   forge experiment new|list|show|validate
   forge run backtest|simulate|list|show|validate
   forge report generate|show
@@ -141,6 +145,8 @@ def dispatch(args: list[str], context_or_root: CommandContext | Path | None = No
         "payout": payout_command.dispatch,
         "history": history_command.dispatch,
         "validate": validate_command.dispatch,
+        "status": status_command.dispatch,
+        "instructions": instructions_command.dispatch,
     }
     try:
         if command == "init":
@@ -153,7 +159,7 @@ def dispatch(args: list[str], context_or_root: CommandContext | Path | None = No
         return fail("invalid-artifact", f"artifact already exists: {exc}", ["choose a different name or inspect the existing artifact"])
     except Exception as exc:
         return fail("unexpected-error", str(exc), ["run the command again with --json and inspect status"])
-    return fail("unknown-command", f"unknown command: {command}", ["forge --help", "forge experiment list --json"])
+    return fail("unknown-command", f"unknown command: {command}", ["forge --help", "forge status --json"], target="command.name", fix="run forge --help to choose a supported command")
 
 
 def _special_response(parsed: ParsedGlobal) -> dict[str, Any] | None:
@@ -162,13 +168,22 @@ def _special_response(parsed: ParsedGlobal) -> dict[str, Any] | None:
     if parsed.show_version:
         return ok({"version": __version__}, [], "ok")
     if parsed.show_help:
-        return ok({"help": HELP_TEXT, "commands": ["init", "validate", "experiment", "run", "report", "compare", "promote", "archive", "export", "assets", "payout", "history"]}, [], "ok")
+        return ok({"help": HELP_TEXT, "commands": ["init", "validate", "status", "instructions", "experiment", "run", "report", "compare", "promote", "archive", "export", "assets", "payout", "history"]}, [], "ok")
     return None
+
+
+def _metadata_args(parsed: ParsedGlobal) -> list[str]:
+    if parsed.show_version:
+        return ["--version"]
+    if parsed.show_help:
+        return ["--help"]
+    return parsed.args
 
 
 def main(argv: list[str] | None = None, provider_factory: ProviderFactory | None = None) -> int:
     parsed = parse_global(list(sys.argv[1:] if argv is None else argv), provider_factory)
     response = _special_response(parsed) or dispatch(parsed.args, parsed.context)
+    response = attach_metadata(response, parsed.context.root, _metadata_args(parsed), parsed.context.dry_run)
     if not parsed.context.as_json and "help" in response.get("data", {}):
         print(response["data"]["help"])
     elif not parsed.context.as_json and "version" in response.get("data", {}):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from forge.common import result_error
 from forge.context import CommandContext
 from forge.responses import fail, ok
 
@@ -23,6 +24,7 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
         experiment = args[0]
         run_ids = args[1:]
     result = service.compare_runs(context.root, experiment, run_ids)
-    if "error" in result:
-        return fail(str(result["error"]), str(result["message"]), [f"forge run list {experiment} --root {context.root} --json"], {"missingRuns": result.get("missingRuns", [])})
+    error = result_error(result)
+    if error is not None:
+        return fail(error[0], error[1], [f"forge run list {experiment} --root {context.root} --json"], {"missingRuns": result.get("missingRuns", [])})
     return ok(result, [f"forge promote run {experiment} {result.get('bestRunId') or '<run-id>'} --root {context.root} --json"])
