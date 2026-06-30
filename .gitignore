@@ -1,7 +1,23 @@
-# Local Factory/Droid configuration, commands, and private skills.
-.factory/
+# Local agent configuration, experiment notes, and private environment files.
 _stude/
 openspec/
-.codex/
 .env
 .venv/
+.opencode/
+
+# Python runtime/cache.
+__pycache__/
+*.py[cod]
+
+# Python build/package outputs.
+build/
+dist/
+*.egg-info/
+
+# Test and coverage outputs.
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local forge artifact root.
+/forge/
