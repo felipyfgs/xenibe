@@ -6,12 +6,14 @@ import unittest
 from pathlib import Path
 
 from xenibe.artifacts.history import file_sha256
+from xenibe.artifacts.naming import is_run_id
 from xenibe.artifacts.store import (
     ImmutableRunError,
     append_scope_revision,
     assert_run_writable,
     create_experiment,
     init_artifact_root,
+    load_json,
     load_yaml,
     validate_config,
     validate_experiment_dir,
@@ -35,6 +37,11 @@ class ArtifactValidationTests(unittest.TestCase):
 
     def test_valid_run_fixture_passes(self) -> None:
         self.assertEqual(validate_run_dir(FIXTURES / "valid-run" / "bt-20260101-000000"), [])
+
+    def test_run_ids_accept_only_backtest_prefix_without_suffixes(self) -> None:
+        self.assertTrue(is_run_id("bt-20260101-000000"))
+        self.assertFalse(is_run_id("sim-20260101-000000"))
+        self.assertFalse(is_run_id("bt-20260101-000000-extra"))
 
     def test_invalid_run_fixture_reports_issues(self) -> None:
         issues = validate_run_dir(FIXTURES / "invalid-run" / "bad_run_id")
@@ -65,6 +72,79 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn(str(root / "config.yml") + ":artifact.root", paths)
         self.assertIn(str(root / "config.yml") + ":contexts.promoted", paths)
         self.assertIn(str(root / "config.yml") + ":contexts.experiment.path", paths)
+
+    def test_config_context_paths_must_be_canonical(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            init_artifact_root(root)
+            self.assertEqual(validate_config(root), [])
+
+            write_yaml(
+                root / "config.yml",
+                {
+                    "schema-version": 1,
+                    "artifact": {"root": str(root)},
+                    "contexts": {
+                        "promoted": {"path": "promoted"},
+                        "archived": {"path": "archive"},
+                        "experiment": {"path": "experiments"},
+                        "scratch": {"path": "scratch"},
+                    },
+                },
+            )
+
+            issues = validate_config(root)
+
+        paths = {issue.path for issue in issues}
+        self.assertIn(str(root / "config.yml") + ":contexts.archived.path", paths)
+        self.assertIn(str(root / "config.yml") + ":contexts.experiment.path", paths)
+        self.assertIn(str(root / "config.yml") + ":contexts.scratch", paths)
+
+    def test_experiment_and_run_identity_contracts_are_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            upper = Path(tmp) / "Robo-Upper"
+            upper.mkdir()
+            upper_issues = validate_experiment_dir(upper)
+
+            suffix_run = Path(tmp) / "bt-20260101-000000-extra"
+            shutil.copytree(FIXTURES / "valid-run" / "bt-20260101-000000", suffix_run)
+            suffix_issues = validate_run_dir(suffix_run)
+
+            mismatch_run = Path(tmp) / "bt-20260101-000000"
+            shutil.copytree(FIXTURES / "valid-run" / "bt-20260101-000000", mismatch_run)
+            for filename in ("manifest.json", "inputs.json", "scoreboard.json", "metrics.json"):
+                data = load_json(mismatch_run / filename)
+                data["runId"] = "bt-20260101-000001"
+                write_json(mismatch_run / filename, data)
+            mismatch_issues = validate_run_dir(mismatch_run, expected_experiment="valid-experiment")
+
+            mode_run = Path(tmp) / "bt-20260101-000002"
+            shutil.copytree(FIXTURES / "valid-run" / "bt-20260101-000000", mode_run)
+            for filename in ("manifest.json", "inputs.json", "scoreboard.json", "metrics.json"):
+                data = load_json(mode_run / filename)
+                data["runId"] = "bt-20260101-000002"
+                if filename == "manifest.json":
+                    data["mode"] = "simulate"
+                write_json(mode_run / filename, data)
+            mode_issues = validate_run_dir(mode_run)
+
+        self.assertTrue(any(issue.code == "invalid-name" for issue in upper_issues))
+        self.assertTrue(any(issue.code == "invalid-name" for issue in suffix_issues))
+        self.assertTrue(any(issue.path.endswith(f"{filename}:runId") for filename in ("manifest.json", "inputs.json", "scoreboard.json", "metrics.json") for issue in mismatch_issues))
+        self.assertIn(str(mode_run / "manifest.json") + ":mode", {issue.path for issue in mode_issues})
+
+    def test_disabled_horizon_validation_does_not_require_gate_details(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_experiment(root, "idx-m1-soros-reversal")
+            experiment = root / "experiment" / "idx-m1-soros-reversal"
+            scope = load_yaml(experiment / "search-scope.yml")
+            scope["horizon-validation"] = {"enabled": False}
+            write_yaml(experiment / "search-scope.yml", scope)
+
+            issues = validate_experiment_dir(experiment)
+
+        self.assertFalse(any("horizon-validation.days" in issue.path or "horizon-validation.gate" in issue.path for issue in issues))
 
     def test_ingest_and_target_semantic_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -110,7 +190,7 @@ class ArtifactValidationTests(unittest.TestCase):
 
         self.assertIn(str(experiment / "ingest.yml") + ":data.path", {issue.path for issue in issues})
 
-    def test_canonical_history_manifest_and_active_legacy_csv_validation(self) -> None:
+    def test_canonical_history_manifest_rejects_noncanonical_csv_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             create_experiment(root, "idx-m1-soros-reversal")
@@ -138,15 +218,15 @@ class ArtifactValidationTests(unittest.TestCase):
 
             valid_issues = validate_experiment_dir(experiment)
 
-            legacy_path = experiment / "data" / "EURUSD_M1_2026-01-01_2026-01-02.csv"
-            legacy_path.write_text(csv_path.read_text(encoding="utf-8"), encoding="utf-8")
+            noncanonical_path = experiment / "data" / "EURUSD_M1_2026-01-01_2026-01-02.csv"
+            noncanonical_path.write_text(csv_path.read_text(encoding="utf-8"), encoding="utf-8")
             ingest["data"]["path"] = "data/EURUSD_M1_2026-01-01_2026-01-02.csv"
             write_yaml(experiment / "ingest.yml", ingest)
-            legacy_issues = validate_experiment_dir(experiment)
+            noncanonical_issues = validate_experiment_dir(experiment)
 
         self.assertEqual(valid_issues, [])
-        self.assertIn(str(experiment / "ingest.yml") + ":data.path", {issue.path for issue in legacy_issues})
-        self.assertTrue(any("data/EURUSD_M1.csv" in issue.message for issue in legacy_issues))
+        self.assertIn(str(experiment / "ingest.yml") + ":data.path", {issue.path for issue in noncanonical_issues})
+        self.assertTrue(any("data/EURUSD_M1.csv" in issue.message for issue in noncanonical_issues))
 
     def test_search_scope_semantic_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -290,17 +370,6 @@ class ArtifactValidationTests(unittest.TestCase):
             issues = validate_run_dir(run_dir)
 
         self.assertTrue(any(issue.code == "invalid-jsonl" and "horizons.jsonl" in issue.path for issue in issues))
-
-    def test_legacy_searchscope_without_canonical_file_reports_migration_issue(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            create_experiment(root, "idx-m1-soros-reversal")
-            experiment = root / "experiment" / "idx-m1-soros-reversal"
-            (experiment / "search-scope.yml").rename(experiment / "searchscope.yml")
-
-            issues = validate_experiment_dir(experiment)
-
-        self.assertTrue(any(issue.code == "missing-artifact" and "legacy searchscope.yml" in issue.message for issue in issues))
 
     def test_scope_revision_record_is_appended(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

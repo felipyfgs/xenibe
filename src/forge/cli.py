@@ -7,26 +7,19 @@ from pathlib import Path
 from typing import Any
 
 from forge import __version__
-from forge.archive import command as archive_command
 from forge.assets import command as assets_command
 from forge.catalog import COMMAND_NAMES, DISPATCH_COMMAND_NAMES, render_help
-from forge.compare import command as compare_command
 from forge.context import CommandContext, ProviderFactory
 from forge.experiment import command as experiment_command
-from forge.export import command as export_command
 from forge.history import command as history_command
 from forge.instructions import command as instructions_command
 from forge.payout import command as payout_command
-from forge.promote import command as promote_command
 from forge.report import command as report_command
 from forge.responses import attach_metadata, emit, fail, ok
 from forge.run import command as run_command
 from forge.status import command as status_command
 from forge.validate import command as validate_command
 from xenibe.artifacts.store import ImmutableRunError, init_artifact_root
-
-
-HELP_TEXT = render_help()
 
 
 @dataclass(frozen=True)
@@ -109,10 +102,6 @@ def dispatch(args: list[str], context_or_root: CommandContext | Path | None = No
         "experiment": experiment_command.dispatch,
         "run": run_command.dispatch,
         "report": report_command.dispatch,
-        "promote": promote_command.dispatch,
-        "archive": archive_command.dispatch,
-        "compare": compare_command.dispatch,
-        "export": export_command.dispatch,
         "assets": assets_command.dispatch,
         "payout": payout_command.dispatch,
         "history": history_command.dispatch,
@@ -141,7 +130,8 @@ def _special_response(parsed: ParsedGlobal) -> dict[str, Any] | None:
     if parsed.show_version:
         return ok({"version": __version__}, [], "ok")
     if parsed.show_help:
-        return ok({"help": HELP_TEXT, "commands": list(COMMAND_NAMES)}, [], "ok")
+        command_name = parsed.args[0] if parsed.args and parsed.args[0] in COMMAND_NAMES else None
+        return ok({"help": render_help(command_name), "commands": list(COMMAND_NAMES)}, [], "ok")
     return None
 
 
@@ -149,7 +139,7 @@ def _metadata_args(parsed: ParsedGlobal) -> list[str]:
     if parsed.show_version:
         return ["--version"]
     if parsed.show_help:
-        return ["--help"]
+        return [*parsed.args, "--help"] if parsed.args else ["--help"]
     return parsed.args
 
 

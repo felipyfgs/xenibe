@@ -93,37 +93,38 @@ class ForgeFeatureTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("version", response["data"])
 
-    def test_artifact_workflows_and_legacy_aliases(self) -> None:
+    def test_artifact_workflows_use_canonical_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["run", "backtest", "idx-m1-soros-reversal", "--run-id", "bt-20260101-000000", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["run", "backtest", "idx-m1-soros-reversal", "--run-id", "bt-20260101-000001", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["run", "backtest", "idx-m1-soros-reversal", "--allow-synthetic", "--run-id", "bt-20260101-000000", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["run", "backtest", "idx-m1-soros-reversal", "--allow-synthetic", "--run-id", "bt-20260101-000001", "--root", str(root)])[0], 0)
 
             metrics_path = root / "experiment" / "idx-m1-soros-reversal" / "runs" / "bt-20260101-000000" / "metrics.json"
             before = metrics_path.read_text(encoding="utf-8")
-            code, response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--run-id", "bt-20260101-000000", "--root", str(root)])
+            code, response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--allow-synthetic", "--run-id", "bt-20260101-000000", "--root", str(root)])
             self.assertNotEqual(code, 0)
             self.assertEqual(response["status"][0]["code"], "immutable-run")
             self.assertEqual(metrics_path.read_text(encoding="utf-8"), before)
 
             self.assertEqual(run_cli(["run", "validate", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["report", "show", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["report", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["compare", "runs", "idx-m1-soros-reversal", "bt-20260101-000000", "bt-20260101-000001", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["compare", "idx-m1-soros-reversal", "bt-20260101-000000", "bt-20260101-000001", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["promote", "run", "idx-m1-soros-reversal", "bt-20260101-000000", "--reason", "test", "--root", str(root)])[0], 0)
+            compare_code, compare_response = run_cli(["run", "compare", "idx-m1-soros-reversal", "bt-20260101-000000", "bt-20260101-000001", "--root", str(root)])
+            self.assertEqual(compare_code, 0, compare_response)
+            self.assertIn("net-profit", compare_response["data"]["runs"][0])
+            self.assertNotIn("netProfit", compare_response["data"]["runs"][0])
+            self.assertEqual(run_cli(["run", "promote", "idx-m1-soros-reversal", "bt-20260101-000000", "--reason", "test", "--root", str(root)])[0], 0)
             self.assertTrue((root / "promoted" / "idx-m1-soros-reversal" / "bt-20260101-000000" / "promotion.yml").exists())
 
             before_archives = sorted(path.name for path in (root / "archived").iterdir())
-            code, response = run_cli(["archive", "experiment", "idx-m1-soros-reversal", "--dry-run", "--root", str(root)])
+            code, response = run_cli(["experiment", "archive", "idx-m1-soros-reversal", "--dry-run", "--root", str(root)])
             self.assertEqual(code, 0)
             self.assertTrue(response["data"]["plannedActions"])
             self.assertEqual(sorted(path.name for path in (root / "archived").iterdir()), before_archives)
 
-            self.assertEqual(run_cli(["export", "run", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
-            self.assertEqual(run_cli(["export", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["run", "export", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "export", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["validate", "--root", str(root)])[0], 0)
 
     def test_provider_commands_use_injected_provider(self) -> None:
@@ -209,6 +210,8 @@ class ForgeFeatureTests(unittest.TestCase):
         self.assertTrue(CountingProvider.calls[1][3].startswith("2026-01-04"))
         self.assertNotEqual(conflict_code, 0)
         self.assertEqual(conflict_response["status"][0]["code"], "replace-required")
+        self.assertEqual(conflict_response["data"]["requestedRange"], {"from": "2026-02-01", "to": "2026-02-02"})
+        self.assertTrue(any("--replace" in action for action in conflict_response["nextActions"]))
         self.assertEqual(replace_code, 0, replace_response)
         self.assertEqual(replace_response["data"]["action"], "replace")
 

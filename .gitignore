@@ -2,6 +2,7 @@
 _stude/
 openspec/
 .env
+.codex/
 .venv/
 .opencode/
 

@@ -5,8 +5,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-EXPERIMENT_RE = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$")
-RUN_ID_RE = re.compile(r"^(?:bt|sim)-\d{8}-\d{6}(?:-[a-z0-9]+(?:-[a-z0-9]+)*)?$")
+EXPERIMENT_RE = KEBAB_RE
+RUN_ID_RE = re.compile(r"^bt-\d{8}-\d{6}$")
 CAMEL_RE = re.compile(r"^[a-z][A-Za-z0-9]*$")
 
 

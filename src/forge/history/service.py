@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import json
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ from xenibe.artifacts.history import (
     canonical_history_relative_path,
     canonical_manifest_path,
     canonical_manifest_relative_path,
+    csv_candle_count,
     expanded_range,
     file_sha256,
     iso_datetime,
@@ -20,6 +20,8 @@ from xenibe.artifacts.history import (
     relative_posix,
     request_range,
     safe_history_label,
+    validate_canonical_manifest,
+    write_history_csv,
 )
 from xenibe.artifacts.store import experiment_dir, load_json, load_yaml, utc_now, write_json, write_yaml
 
@@ -33,23 +35,6 @@ def _history_path(root: Path, experiment: str, asset: str, timeframe: str, start
 
 def _manifest_path(root: Path, experiment: str, asset: str, timeframe: str) -> Path:
     return canonical_manifest_path(experiment_dir(root, experiment), asset, timeframe)
-
-
-def _write_csv(path: Path, records: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    ordered = ["time", "asset", "timeframe", "open", "high", "low", "close"]
-    extras = sorted({key for record in records for key in record} - set(ordered))
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=[*ordered, *extras])
-        writer.writeheader()
-        for record in records:
-            writer.writerow(record)
-
-
-def _csv_candle_count(path: Path) -> int:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        return sum(1 for _ in reader)
 
 
 def _normalize_candle_records(candles: Any, asset: str, timeframe: str, start: str, end: str) -> list[dict[str, Any]]:
@@ -146,24 +131,11 @@ def _load_valid_manifest(path: Path, csv_path: Path, asset: str, timeframe: str)
         manifest = load_json(path)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return _manifest_conflict(f"canonical manifest is malformed: {exc}", path)
-    expected_path = relative_posix(canonical_history_relative_path(asset, timeframe))
-    if str(manifest.get("asset", "")).upper() != safe_history_label(asset):
-        return _manifest_conflict("canonical manifest asset does not match requested asset", path)
-    if str(manifest.get("timeframe", "")).upper() != safe_history_label(timeframe):
-        return _manifest_conflict("canonical manifest timeframe does not match requested timeframe", path)
-    if manifest.get("path") != expected_path:
-        return _manifest_conflict(f"canonical manifest path must be {expected_path}", path)
-    if manifest_range(manifest) is None:
-        return _manifest_conflict("canonical manifest coverageRange is missing or invalid", path)
-    if not isinstance(manifest.get("candleCount"), int) or int(manifest["candleCount"]) < 0:
-        return _manifest_conflict("canonical manifest candleCount must be a non-negative integer", path)
-    try:
-        if manifest.get("sha256") != file_sha256(csv_path):
-            return _manifest_conflict("canonical manifest checksum does not match CSV", path)
-        if int(manifest["candleCount"]) != _csv_candle_count(csv_path):
-            return _manifest_conflict("canonical manifest candleCount does not match CSV", path)
-    except OSError as exc:
-        return _manifest_conflict(f"canonical CSV cannot be read: {exc}", csv_path)
+    manifest_errors = validate_canonical_manifest(manifest, csv_path, asset, timeframe)
+    if manifest_errors:
+        field, message = manifest_errors[0]
+        target = csv_path if field == "csv" else path
+        return _manifest_conflict(f"canonical manifest {field} {message}", target)
     return manifest
 
 
@@ -230,6 +202,9 @@ def download(context: CommandContext, experiment: str, asset: str, timeframe: st
             "manifestPath": str(manifest_path),
             "requestedRange": {"from": start, "to": end},
             "coverageRange": manifest.get("coverageRange") if manifest else None,
+            "next": [
+                f"forge history download {asset} --experiment {experiment} --timeframe {timeframe} --from {start} --to {end} --replace --root {context.root} --json"
+            ],
         }
     if action == "conflict":
         return _manifest_conflict("canonical coverage cannot be safely reused or expanded", manifest_path)
@@ -253,7 +228,7 @@ def download(context: CommandContext, experiment: str, asset: str, timeframe: st
         return provider_error_payload(exc)
     metadata = provider_metadata(provider)
     normalized = _normalize_candle_records(candles, asset, timeframe, download_start, download_end)
-    _write_csv(path, normalized)
+    write_history_csv(path, normalized)
     manifest_data = _write_manifest(manifest_path, asset, timeframe, start, end, iso_datetime(download_range[0]), iso_datetime(download_range[1]), path, len(normalized), metadata)
     _update_ingest(base, asset, timeframe, start, end)
     payload = {

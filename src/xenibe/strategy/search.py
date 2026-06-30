@@ -9,8 +9,8 @@ from xenibe.metrics.summary import METRIC_NET_PROFIT
 from xenibe.strategy.components import CANONICAL_SEARCH_FLOW, LOOP_LIMIT_DEFAULTS, canonical_role
 
 
-def resolve_limits(searchscope: dict[str, Any], default_max_candidates: int = 25) -> dict[str, Any]:
-    limits = {**LOOP_LIMIT_DEFAULTS, **dict(searchscope.get("limits", {}))}
+def resolve_limits(search_scope: dict[str, Any], default_max_candidates: int = 25) -> dict[str, Any]:
+    limits = {**LOOP_LIMIT_DEFAULTS, **dict(search_scope.get("limits", {}))}
     dynamic_defaults = {**LOOP_LIMIT_DEFAULTS, "max-candidates": default_max_candidates}
     for key, value in list(limits.items()):
         if value == "dynamic":
@@ -62,12 +62,12 @@ def evaluation_fingerprint(candidate: dict[str, Any], context: dict[str, Any]) -
     )
 
 
-def generate_candidates(searchscope: dict[str, Any], limits: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    resolved = limits or resolve_limits(searchscope)
+def generate_candidates(search_scope: dict[str, Any], limits: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    resolved = limits or resolve_limits(search_scope)
     max_candidates = int(resolved.get("max-candidates", 25))
-    components = searchscope.get("components", {})
+    components = search_scope.get("components", {})
     groups: list[list[dict[str, Any]]] = []
-    flow = searchscope.get("flow")
+    flow = search_scope.get("flow")
     stages = flow if isinstance(flow, list) else list(components)
     for role in stages:
         items = components.get(role, [])
@@ -107,28 +107,49 @@ def classify_candidate(metrics: dict[str, float], target: dict[str, Any]) -> tup
     return "rejected", "target-not-hit"
 
 
-def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metric: str) -> dict[str, Any]:
-    candidates = [candidate for candidate in candidates if candidate.get("classification") != "skipped" and candidate.get("status") != "skipped-duplicate"]
-    def ranking_key(candidate: dict[str, Any]) -> tuple[float, float, float, float]:
-        horizon = candidate.get("horizonValidation")
-        gate_rank = 0.0
-        worst_horizon = float("-inf")
-        if isinstance(horizon, dict):
-            gate_rank = 1.0 if horizon.get("status") == "passed" else 0.0
-            if horizon.get("worstHorizonTargetMetric") is not None:
-                worst_horizon = float(horizon.get("worstHorizonTargetMetric", 0.0))
-        return (
-            gate_rank,
-            float(candidate.get("metrics", {}).get(target_metric, 0.0)),
-            float(candidate.get("metrics", {}).get(METRIC_NET_PROFIT, 0.0)),
-            worst_horizon,
-        )
+def candidate_rank_key(record: dict[str, Any] | None, target_metric: str) -> tuple[float, float, float, float]:
+    if record is None:
+        return (float("-inf"), float("-inf"), float("-inf"), float("-inf"))
+    metrics = record.get("metrics", {})
+    if not isinstance(metrics, dict):
+        metrics = {}
+    horizon = record.get("horizonValidation")
+    gate_rank = 0.0
+    worst_horizon = float("-inf")
+    if isinstance(horizon, dict):
+        gate_rank = 1.0 if horizon.get("status") == "passed" else 0.0
+        if horizon.get("worstHorizonTargetMetric") is not None:
+            worst_horizon = float(horizon.get("worstHorizonTargetMetric", 0.0))
+    return (
+        gate_rank,
+        float(metrics.get(target_metric, 0.0)),
+        float(metrics.get(METRIC_NET_PROFIT, 0.0)),
+        worst_horizon,
+    )
 
-    ranked = sorted(
-        candidates,
-        key=ranking_key,
+
+def candidate_is_rankable(record: dict[str, Any]) -> bool:
+    return record.get("classification") != "skipped" and record.get("status") != "skipped-duplicate"
+
+
+def candidate_allows_target_hit(record: dict[str, Any] | None) -> bool:
+    if record is None:
+        return False
+    horizon = record.get("horizonValidation")
+    return not isinstance(horizon, dict) or horizon.get("status") == "passed"
+
+
+def rank_candidates(candidates: list[dict[str, Any]], target_metric: str) -> list[dict[str, Any]]:
+    return sorted(
+        [candidate for candidate in candidates if candidate_is_rankable(candidate)],
+        key=lambda candidate: candidate_rank_key(candidate, target_metric),
         reverse=True,
     )
+
+
+def build_scoreboard(run_id: str, candidates: list[dict[str, Any]], target_metric: str) -> dict[str, Any]:
+    candidates = [candidate for candidate in candidates if candidate_is_rankable(candidate)]
+    ranked = rank_candidates(candidates, target_metric)
     candidate_rows = [
         {
             "rank": index,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -61,6 +62,57 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def write_history_csv(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ordered = ["time", "asset", "timeframe", "open", "high", "low", "close"]
+    extras = sorted({key for record in records for key in record} - set(ordered))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[*ordered, *extras])
+        writer.writeheader()
+        for record in records:
+            writer.writerow(record)
+
+
+def csv_candle_count(path: Path) -> int:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return sum(1 for _ in reader)
+
+
+def validate_canonical_manifest(manifest: dict[str, Any], csv_path: Path, asset: str, timeframe: str) -> list[tuple[str, str]]:
+    errors: list[tuple[str, str]] = []
+    expected_path = relative_posix(canonical_history_relative_path(asset, timeframe))
+    if str(manifest.get("asset", "")).upper() != safe_history_label(asset):
+        errors.append(("asset", "must match ingest.yml:data.asset"))
+    if str(manifest.get("timeframe", "")).upper() != safe_history_label(timeframe):
+        errors.append(("timeframe", "must match ingest.yml:data.timeframe"))
+    if manifest.get("path") != expected_path:
+        errors.append(("path", f"must equal {expected_path}"))
+    if manifest_range(manifest) is None:
+        errors.append(("coverageRange", "must contain valid from/to coverage dates"))
+    if not isinstance(manifest.get("candleCount"), int) or int(manifest.get("candleCount", -1)) < 0:
+        errors.append(("candleCount", "must be a non-negative integer"))
+    else:
+        try:
+            actual_count = csv_candle_count(csv_path)
+        except OSError as exc:
+            errors.append(("csv", str(exc)))
+        else:
+            if int(manifest["candleCount"]) != actual_count:
+                errors.append(("candleCount", "must match the canonical CSV row count"))
+    if not isinstance(manifest.get("sha256"), str) or not manifest.get("sha256"):
+        errors.append(("sha256", "must be a non-empty checksum"))
+    else:
+        try:
+            actual_hash = file_sha256(csv_path)
+        except OSError as exc:
+            errors.append(("csv", str(exc)))
+        else:
+            if manifest["sha256"] != actual_hash:
+                errors.append(("sha256", "must match the canonical CSV checksum"))
+    return errors
 
 
 def manifest_range(manifest: dict[str, Any], key: str = "coverageRange") -> tuple[datetime, datetime] | None:

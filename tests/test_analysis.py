@@ -6,12 +6,12 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from forge.run.service import run_backtest
+from forge.run.service import _horizon_record, run_backtest
 from xenibe.analysis import AnalysisContext, evaluate_component
 from xenibe.analysis import native
 from xenibe.analysis.registry import EVALUATORS
 from xenibe.artifacts.history import file_sha256
-from xenibe.artifacts.store import write_json, write_yaml
+from xenibe.artifacts.store import load_yaml, write_json, write_yaml
 from xenibe.candles import Candle
 from xenibe.strategy import UnsupportedComponentError, compile_candidate_strategy, evaluate_candidate_decision
 from xenibe.strategy.components import COMPONENT_PARAMETER_RULES
@@ -213,17 +213,17 @@ class EvaluatorAndCompilerTests(unittest.TestCase):
         self.assertEqual(conflict["reason"], "side-conflict")
 
 
-class SearchScopeRunIntegrationTests(unittest.TestCase):
+class CandidateSearchRunIntegrationTests(unittest.TestCase):
     def test_search_scope_candidates_produce_distinct_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            experiment = root / "experiment" / "robo-LKSJDLKKL"
+            experiment = root / "experiment" / "robo-lksjdlkkk"
             data = experiment / "data"
             data.mkdir(parents=True)
             write_yaml(
                 experiment / "experiment.yml",
                 {
-                    "name": "robo-LKSJDLKKL",
+                    "name": "robo-lksjdlkkk",
                     "hypothesis": "Search-scope candidates compile to executable strategies.",
                     "target": {"metric": "win-rate", "operator": ">=", "value": 2.0},
                     "stop-on-target": True,
@@ -270,10 +270,10 @@ class SearchScopeRunIntegrationTests(unittest.TestCase):
                 for item in bullish_candles(30):
                     handle.write(f"{item.time},{item.open},{item.high},{item.low},{item.close}\n")
 
-            response = run_backtest(root, "robo-LKSJDLKKL", "backtest", "bt-20260101-000000")
+            response = run_backtest(root, "robo-lksjdlkkk", "backtest", "bt-20260101-000000")
             candidates_path = experiment / "runs" / "bt-20260101-000000" / "candidates.jsonl"
             candidates = [json.loads(line) for line in candidates_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            second_response = run_backtest(root, "robo-LKSJDLKKL", "backtest", "bt-20260101-000001")
+            second_response = run_backtest(root, "robo-lksjdlkkk", "backtest", "bt-20260101-000001")
             second_run = experiment / "runs" / "bt-20260101-000001"
             second_candidates = [json.loads(line) for line in (second_run / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
             second_scoreboard = json.loads((second_run / "scoreboard.json").read_text(encoding="utf-8"))
@@ -342,6 +342,17 @@ class SearchScopeRunIntegrationTests(unittest.TestCase):
         self.assertEqual(candidates[0]["reason"], "horizon-validation-failed")
         self.assertEqual(candidates[0]["horizonValidation"]["status"], "failed")
         self.assertTrue(any(record["horizonDays"] == 15 and record["status"] == "insufficient-data" for record in horizons))
+
+    def test_horizon_gate_can_ignore_positive_net_profit_requirement(self) -> None:
+        candidate = {"candidateId": "candidate-000001"}
+        target = {"metric": "total-trades", "operator": ">=", "value": 1}
+        result = {"metrics": {"total-trades": 1, "net-profit": 0.0}}
+
+        allowed = _horizon_record(candidate, 1, "2026-01-02", 0.001, target, result, False)
+        blocked = _horizon_record(candidate, 1, "2026-01-02", 0.001, target, result, True)
+
+        self.assertEqual(allowed["status"], "passed")
+        self.assertEqual(blocked["status"], "failed")
 
 
 if __name__ == "__main__":

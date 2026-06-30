@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from forge.archive import service as archive_service
 from forge.common import dry_status, result_error
 from forge.context import CommandContext
+from forge.export import service as export_service
 from forge.responses import fail, ok
 
 from . import service
@@ -41,4 +43,20 @@ def dispatch(args: list[str], context: CommandContext) -> dict[str, Any]:
         if not result["valid"]:
             return fail("invalid-artifact", "experiment validation failed", [f"fix reported artifacts under {context.root / 'experiment' / args[1]}", f"forge experiment validate {args[1]} --root {context.root} --json"], {"issues": result["issues"]})
         return ok(result, [f"forge run backtest {args[1]} --root {context.root} --json"], "validated")
+    if command == "archive":
+        if len(args) < 2:
+            return fail("missing-name", "experiment name required", ["forge experiment list --json"])
+        result = archive_service.archive_experiment(context.root, args[1], context.dry_run)
+        error = result_error(result)
+        if error is not None:
+            return fail(error[0], error[1], [f"forge experiment list --root {context.root} --json"])
+        return ok(result, ["forge experiment list --json"], dry_status(context.dry_run))
+    if command == "export":
+        if len(args) < 2:
+            return fail("missing-name", "experiment name required", ["forge experiment list --json"])
+        result = export_service.export_experiment(context.root, args[1], context.dry_run)
+        error = result_error(result)
+        if error is not None:
+            return fail(error[0], error[1], [f"forge experiment list --root {context.root} --json"])
+        return ok(result, ["share or inspect the export artifact"], dry_status(context.dry_run))
     return fail("unknown-command", f"unknown experiment command: {command}", ["forge experiment list --json"])

@@ -16,7 +16,7 @@ This repository is a Python 3.11 experiment lab for Xenibe research. Core code l
 
 ## Coding Style & Naming Conventions
 
-Use 4-space indentation, type hints, and small functions that match the existing standard-library-first style. Keep imports grouped as standard library, third-party, then local modules. Prefer explicit `pathlib.Path` handling for filesystem work. CLI commands should return structured responses through the existing response helpers. Experiment names use kebab-case. Run IDs follow `bt-YYYYMMDD-HHMMSS` or `sim-YYYYMMDD-HHMMSS`.
+Use 4-space indentation, type hints, and small functions that match the existing standard-library-first style. Keep imports grouped as standard library, third-party, then local modules. Prefer explicit `pathlib.Path` handling for filesystem work. CLI commands should return structured responses through the existing response helpers. Experiment names use kebab-case. Run IDs follow `bt-YYYYMMDD-HHMMSS`.
 
 ## Testing Guidelines
 

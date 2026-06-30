@@ -14,29 +14,32 @@ from xenibe.artifacts.history import (
     canonical_history_path,
     canonical_history_relative_path,
     canonical_manifest_path,
-    file_sha256,
     manifest_range,
     parse_datetime,
     relative_posix,
     request_range,
-    safe_history_label,
+    validate_canonical_manifest,
 )
 from xenibe.artifacts.naming import find_non_kebab_keys, is_experiment_name, is_run_id
 from xenibe.artifacts.schemas import (
+    CANONICAL_CONTEXT_PATHS,
     CANONICAL_SEARCH_FLOW,
     COMPONENT_PARAMETER_RULES,
     COMPONENT_TYPE_REGISTRY,
     DEFAULT_EXPERIMENT,
     DEFAULT_INGEST,
-    DEFAULT_SEARCHSCOPE,
+    DEFAULT_SEARCH_SCOPE,
     DETAIL_JSONL_FILES,
     EXPERIMENT_FILES,
     EXPERIMENT_REQUIRED_KEYS,
     LOOP_LIMIT_KEYS,
     REQUIRED_SEARCH_STAGES,
     RUN_ARTIFACTS,
+    RUN_ID_MODE_PREFIXES,
     RUN_JSON_REQUIRED_KEYS,
     RUN_JSONL_FILES,
+    RUN_MODES,
+    RUN_STATUS_VALUES,
     VALID_FORMATS,
     VALID_PROVIDERS,
     VALID_SOURCES,
@@ -62,6 +65,8 @@ def utc_now() -> str:
 
 
 def make_run_id(prefix: str = "bt") -> str:
+    if prefix not in {"bt", "sim"}:
+        raise ValueError("run-id-prefix-must-be-bt-or-sim")
     return f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
 
@@ -99,6 +104,19 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
         handle.write("\n")
+
+
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for index, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            if not isinstance(data, dict):
+                raise ValueError(f"jsonl-record-{index}-must-be-object")
+            records.append(data)
+    return records
 
 
 def scope_hash(scope: dict[str, Any]) -> str:
@@ -171,7 +189,7 @@ def create_experiment(root: Path, name: str) -> Path:
     defaults = {
         "experiment.yml": {**DEFAULT_EXPERIMENT, "name": name},
         "ingest.yml": DEFAULT_INGEST,
-        "search-scope.yml": DEFAULT_SEARCHSCOPE,
+        "search-scope.yml": DEFAULT_SEARCH_SCOPE,
     }
     for filename, data in defaults.items():
         write_yaml(experiment / filename, data)
@@ -188,6 +206,13 @@ def list_experiments(root: Path) -> list[str]:
         if child.is_dir() and (child / "experiment.yml").exists():
             names.append(child.name)
     return sorted(names)
+
+
+def list_experiment_dirs(root: Path) -> list[str]:
+    base = experiments_root(root)
+    if not base.exists():
+        return []
+    return sorted(child.name for child in base.iterdir() if child.is_dir())
 
 
 def load_experiment(root: Path, name: str) -> dict[str, dict[str, Any]]:
@@ -277,6 +302,8 @@ def _validate_horizon_validation(path: Path, value: Any) -> list[ValidationIssue
     if not isinstance(value, dict):
         return [_issue(path, "horizon-validation", "must be an object")]
     _check_bool(issues, path, "horizon-validation.enabled", value.get("enabled"))
+    if value.get("enabled") is not True:
+        return issues
     days = value.get("days")
     if not isinstance(days, list) or not days:
         issues.append(_issue(path, "horizon-validation.days", "must be a non-empty list of positive integers"))
@@ -328,13 +355,19 @@ def validate_config(root: Path) -> list[ValidationIssue]:
     if not isinstance(contexts, dict):
         issues.append(_issue(path, "contexts", "must be an object"))
         return issues
-    for name in ("promoted", "archived", "experiment"):
+    for name in sorted(set(contexts) - set(CANONICAL_CONTEXT_PATHS)):
+        issues.append(_issue(path, f"contexts.{name}", "unsupported context; canonical contexts are promoted, archived, and experiment"))
+    for name, canonical_path in CANONICAL_CONTEXT_PATHS.items():
         context = contexts.get(name)
         field = f"contexts.{name}"
         if not isinstance(context, dict):
             issues.append(_issue(path, field, "must be an object"))
             continue
-        resolved = _safe_relative_path(root, context.get("path"))
+        configured_path = context.get("path")
+        if configured_path != canonical_path:
+            issues.append(_issue(path, f"{field}.path", f"must equal canonical path {canonical_path}"))
+            continue
+        resolved = _safe_relative_path(root, configured_path)
         if resolved is None:
             issues.append(_issue(path, f"{field}.path", "must be a safe relative path inside the artifact root"))
             continue
@@ -361,13 +394,6 @@ def _validate_experiment_yaml(path: Path, data: dict[str, Any], expected_name: s
     return issues
 
 
-def _csv_candle_count(path: Path) -> int:
-    with path.open("r", encoding="utf-8") as handle:
-        if not handle.readline():
-            return 0
-        return sum(1 for line in handle if line.strip())
-
-
 def _validate_history_manifest(path: Path, experiment_path: Path, ingest_data: dict[str, Any], csv_path: Path) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not path.exists():
@@ -381,41 +407,17 @@ def _validate_history_manifest(path: Path, experiment_path: Path, ingest_data: d
 
     asset = str(ingest_data.get("asset", ""))
     timeframe = str(ingest_data.get("timeframe", ""))
-    expected_relative = relative_posix(canonical_history_relative_path(asset, timeframe))
-    if str(manifest.get("asset", "")).upper() != safe_history_label(asset):
-        issues.append(_issue(path, "asset", "must match ingest.yml:data.asset"))
-    if str(manifest.get("timeframe", "")).upper() != safe_history_label(timeframe):
-        issues.append(_issue(path, "timeframe", "must match ingest.yml:data.timeframe"))
-    if manifest.get("path") != expected_relative:
-        issues.append(_issue(path, "path", f"must equal {expected_relative}"))
+    for field, message in validate_canonical_manifest(manifest, csv_path, asset, timeframe):
+        issue_path = csv_path if field == "csv" else path
+        issues.append(_issue(issue_path, "" if field == "csv" else field, message))
 
     coverage = manifest_range(manifest)
     if coverage is None:
-        issues.append(_issue(path, "coverageRange", "must contain valid from/to coverage dates"))
-    requested = request_range(ingest_data.get("from"), ingest_data.get("to"))
+        requested = None
+    else:
+        requested = request_range(ingest_data.get("from"), ingest_data.get("to"))
     if requested is not None and coverage is not None and not (coverage[0] <= requested[0] and requested[1] <= coverage[1]):
         issues.append(_issue(path, "coverageRange", "must cover ingest.yml:data.from through data.to as [from, to)"))
-
-    if not isinstance(manifest.get("candleCount"), int) or int(manifest.get("candleCount", -1)) < 0:
-        issues.append(_issue(path, "candleCount", "must be a non-negative integer"))
-    else:
-        try:
-            actual_count = _csv_candle_count(csv_path)
-        except OSError as exc:
-            issues.append(ValidationIssue("missing-artifact", str(csv_path), str(exc)))
-        else:
-            if int(manifest["candleCount"]) != actual_count:
-                issues.append(_issue(path, "candleCount", "must match the canonical CSV row count"))
-    if not isinstance(manifest.get("sha256"), str) or not manifest.get("sha256"):
-        issues.append(_issue(path, "sha256", "must be a non-empty checksum"))
-    else:
-        try:
-            actual_hash = file_sha256(csv_path)
-        except OSError as exc:
-            issues.append(ValidationIssue("missing-artifact", str(csv_path), str(exc)))
-        else:
-            if manifest["sha256"] != actual_hash:
-                issues.append(_issue(path, "sha256", "must match the canonical CSV checksum"))
     return issues
 
 
@@ -650,15 +652,12 @@ def _validate_risk_yaml(path: Path, data: dict[str, Any]) -> list[ValidationIssu
 def validate_experiment_dir(path: Path) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not is_experiment_name(path.name):
-        issues.append(ValidationIssue("invalid-name", str(path), "experiment directory must use letters, numbers, and hyphens"))
+        issues.append(ValidationIssue("invalid-name", str(path), "experiment directory must use lowercase kebab-case"))
     loaded: dict[str, dict[str, Any]] = {}
     for filename in EXPERIMENT_FILES:
         file_path = path / filename
         if not file_path.exists():
-            message = f"missing {filename}"
-            if filename == "search-scope.yml" and (path / "searchscope.yml").exists():
-                message = "missing search-scope.yml; legacy searchscope.yml is unsupported, migrate to search-scope.yml"
-            issues.append(ValidationIssue("missing-artifact", str(file_path), message))
+            issues.append(ValidationIssue("missing-artifact", str(file_path), f"missing {filename}"))
             continue
         try:
             data = load_yaml(file_path)
@@ -689,6 +688,17 @@ def validate_experiment_dir(path: Path) -> list[ValidationIssue]:
             for key_path in find_non_kebab_keys(risk):
                 issues.append(ValidationIssue("invalid-name", f"{risk_path}:{key_path}", "YAML keys must use kebab-case"))
             issues.extend(_validate_risk_yaml(risk_path, risk))
+    for filename in ("provider.yml", "report.yml"):
+        optional_path = path / filename
+        if not optional_path.exists():
+            continue
+        try:
+            data = load_yaml(optional_path)
+        except Exception as exc:
+            issues.append(ValidationIssue("invalid-yaml", str(optional_path), str(exc)))
+            continue
+        for key_path in find_non_kebab_keys(data):
+            issues.append(ValidationIssue("invalid-name", f"{optional_path}:{key_path}", "YAML keys must use kebab-case"))
     return issues
 
 
@@ -734,10 +744,17 @@ def validate_candidates_jsonl(path: Path) -> list[ValidationIssue]:
     return issues
 
 
-def validate_run_dir(path: Path) -> list[ValidationIssue]:
+def _mode_for_run_id(run_id: str) -> str | None:
+    if run_id.startswith("bt-"):
+        return "backtest"
+    return None
+
+
+def validate_run_dir(path: Path, expected_experiment: str | None = None, expected_mode: str | None = None) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     if not is_run_id(path.name):
-        issues.append(ValidationIssue("invalid-name", str(path), "run id must use bt-YYYYMMDD-HHMMSS or sim-YYYYMMDD-HHMMSS"))
+        issues.append(ValidationIssue("invalid-name", str(path), "run id must use bt-YYYYMMDD-HHMMSS"))
+    loaded_json: dict[str, dict[str, Any]] = {}
     for filename in RUN_ARTIFACTS:
         file_path = path / filename
         if not file_path.exists():
@@ -749,6 +766,7 @@ def validate_run_dir(path: Path) -> list[ValidationIssue]:
             except Exception as exc:
                 issues.append(ValidationIssue("invalid-json", str(file_path), str(exc)))
                 continue
+            loaded_json[filename] = data
             for key in RUN_JSON_REQUIRED_KEYS[filename]:
                 if key not in data:
                     issues.append(ValidationIssue("invalid-artifact", str(file_path), f"missing key {key}"))
@@ -768,6 +786,31 @@ def validate_run_dir(path: Path) -> list[ValidationIssue]:
         file_path = path / filename
         if file_path.exists():
             issues.extend(validate_jsonl(file_path))
+    for filename, data in loaded_json.items():
+        run_id = data.get("runId")
+        if not isinstance(run_id, str) or not is_run_id(run_id):
+            issues.append(_issue(path / filename, "runId", "must use bt-YYYYMMDD-HHMMSS"))
+        elif run_id != path.name:
+            issues.append(_issue(path / filename, "runId", "must match the run directory name"))
+    manifest = loaded_json.get("manifest.json")
+    if manifest is not None:
+        experiment = manifest.get("experiment")
+        mode = manifest.get("mode")
+        status = manifest.get("status")
+        if expected_experiment is not None and experiment != expected_experiment:
+            issues.append(_issue(path / "manifest.json", "experiment", "must match the expected experiment"))
+        if not isinstance(mode, str) or mode not in RUN_MODES:
+            issues.append(_issue(path / "manifest.json", "mode", f"must be one of {', '.join(RUN_MODES)}"))
+        elif expected_mode is not None and mode != expected_mode:
+            issues.append(_issue(path / "manifest.json", "mode", "must match the expected run mode"))
+        elif is_run_id(path.name) and _mode_for_run_id(path.name) != mode:
+            expected_prefix = RUN_ID_MODE_PREFIXES.get(mode)
+            issues.append(_issue(path / "manifest.json", "mode", f"must match run id prefix {expected_prefix}-"))
+        if not isinstance(status, str) or status not in RUN_STATUS_VALUES:
+            issues.append(_issue(path / "manifest.json", "status", f"must be one of {', '.join(RUN_STATUS_VALUES)}"))
+    metrics = loaded_json.get("metrics.json")
+    if metrics is not None and metrics.get("status") != "completed":
+        issues.append(_issue(path / "metrics.json", "status", "must equal completed"))
     return issues
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import copy
 import csv
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import timedelta
@@ -9,9 +9,10 @@ from math import ceil
 from pathlib import Path
 from typing import Any
 
-from xenibe.artifacts.history import canonical_manifest_path, manifest_range, parse_datetime
+from xenibe.artifacts.history import file_sha256, parse_datetime
 from xenibe.artifacts.naming import is_run_id
 from xenibe.artifacts.store import (
+    ValidationIssue,
     append_jsonl,
     complete_run,
     ensure_run_artifacts,
@@ -29,9 +30,10 @@ from xenibe.backtest import DEFAULT_BACKTEST_PAYOUT, run_m1_backtest
 from xenibe.candles import Candle
 from xenibe.metrics.summary import METRIC_NET_PROFIT, calculate_trade_metrics
 from xenibe.risk import DEFAULT_RISK
-from xenibe.strategy import UnsupportedComponentError, build_scoreboard, classify_candidate, compile_candidate_strategy, evaluation_fingerprint, generate_candidates, resolve_limits, target_satisfied
+from xenibe.strategy import UnsupportedComponentError, build_scoreboard, candidate_rank_key, classify_candidate, compile_candidate_strategy, evaluation_fingerprint, generate_candidates, resolve_limits, target_satisfied
 
-from forge.common import issues_payload, load_metrics, render_run_report, run_dir
+from forge.common import issues_payload, render_run_report, run_dir
+from forge.run_consumer import completed_run
 
 
 @dataclass(frozen=True)
@@ -131,11 +133,7 @@ def configured_history_files(source: Path) -> list[Path]:
 
 
 def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def history_data_context(source: Path, candle_count: int) -> dict[str, Any]:
@@ -172,11 +170,21 @@ def history_data_context(source: Path, candle_count: int) -> dict[str, Any]:
     return context
 
 
+def _deep_merge(default: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(default)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def optional_config(experiment_path: Path, filename: str, default: dict[str, Any]) -> dict[str, Any]:
     path = experiment_path / filename
     if path.exists():
-        return load_yaml(path)
-    return default
+        return _deep_merge(default, load_yaml(path))
+    return copy.deepcopy(default)
 
 
 def _prior_evaluation_index(experiment_path: Path) -> dict[str, dict[str, Any]]:
@@ -218,71 +226,78 @@ def _evaluation_context(configs: dict[str, dict[str, Any]], risk: dict[str, Any]
 
 
 def _candidate_key(record: dict[str, Any] | None, target_metric: str) -> tuple[float, float, float, float]:
-    if record is None:
-        return (float("-inf"), float("-inf"), float("-inf"), float("-inf"))
-    metrics = record.get("metrics", {})
-    horizon = record.get("horizonValidation")
-    gate_rank = 0.0
-    worst_horizon = float("-inf")
-    if isinstance(horizon, dict):
-        gate_rank = 1.0 if horizon.get("status") == "passed" else 0.0
-        if horizon.get("worstHorizonTargetMetric") is not None:
-            worst_horizon = float(horizon.get("worstHorizonTargetMetric", 0.0))
-    return (gate_rank, float(metrics.get(target_metric, 0.0)), float(metrics.get(METRIC_NET_PROFIT, 0.0)), worst_horizon)
+    return candidate_rank_key(record, target_metric)
 
 
 def _resolve_run_id(mode: str, run_id: str | None) -> dict[str, Any] | str:
-    prefix = "sim" if mode == "simulate" else "bt"
-    resolved_run_id = run_id or make_run_id(prefix)
+    if mode != "backtest":
+        return {
+            "error": "invalid-artifact",
+            "message": "run mode must be backtest",
+            "next": ["forge run backtest <experiment> --json"],
+        }
+    resolved_run_id = run_id or make_run_id("bt")
     if not is_run_id(resolved_run_id):
         return {
             "error": "invalid-name",
-            "message": "run id must use bt-YYYYMMDD-HHMMSS or sim-YYYYMMDD-HHMMSS",
+            "message": "run id must use bt-YYYYMMDD-HHMMSS",
+            "next": ["omit --run-id to generate one"],
+        }
+    if not resolved_run_id.startswith("bt-"):
+        return {
+            "error": "invalid-name",
+            "message": "backtest run IDs must use the bt- prefix",
             "next": ["omit --run-id to generate one"],
         }
     return resolved_run_id
 
 
-def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict[str, Any]) -> CandleLoad | dict[str, Any]:
+def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict[str, Any], allow_synthetic: bool) -> CandleLoad | dict[str, Any]:
     candles = load_history_candles(base, ingest)
     if candles:
         return CandleLoad(candles, "configured-history")
     source = configured_history_source(base, ingest)
     history_files = configured_history_files(source)
-    if not history_files:
+    if allow_synthetic:
         return CandleLoad(default_candles(), "synthetic-default")
     ingest_data = ingest.get("data", {})
     return {
         "error": "missing-artifact",
-        "message": f"no parseable candle data found at {source}",
+        "message": f"no parseable candle data found at {source}; pass --allow-synthetic to use default synthetic candles",
         "next": [
-            f"forge history download {ingest_data.get('asset', '<asset>')} --experiment {experiment} --timeframe {ingest_data.get('timeframe', 'M1')} --from {ingest_data.get('from', '<from>')} --to {ingest_data.get('to', '<to>')} --root {root} --json"
+            f"forge history download {ingest_data.get('asset', '<asset>')} --experiment {experiment} --timeframe {ingest_data.get('timeframe', 'M1')} --from {ingest_data.get('from', '<from>')} --to {ingest_data.get('to', '<to>')} --root {root} --json",
+            f"forge run backtest {experiment} --allow-synthetic --root {root} --json",
         ],
         "issues": [
             {
                 "code": "missing-artifact",
                 "path": f"{base / 'ingest.yml'}:data.path",
-                "message": f"configured history file(s) contain no parseable candles: {', '.join(str(path) for path in history_files)}",
+                "message": f"configured history file(s) contain no parseable candles: {', '.join(str(path) for path in history_files) if history_files else source}",
             }
         ],
     }
 
 
-def _load_run_setup(root: Path, experiment: str) -> RunSetup | dict[str, Any]:
+def _load_run_setup(root: Path, experiment: str, allow_synthetic: bool) -> RunSetup | dict[str, Any]:
     base = experiment_dir(root, experiment)
     issues = validate_experiment_dir(base)
     if issues:
-        return {"error": "invalid-artifact", "message": "experiment validation failed", "issues": issues_payload(issues)}
+        error = "invalid-yaml" if any(issue.code == "invalid-yaml" for issue in issues) else "invalid-artifact"
+        return {"error": error, "message": "experiment validation failed", "issues": issues_payload(issues)}
 
     configs = load_experiment(root, experiment)
     search_scope = configs["search-scope.yml"]
-    risk = optional_config(base, "risk.yml", DEFAULT_RISK)
-    provider = optional_config(base, "provider.yml", DEFAULT_PROVIDER)
-    report_config = optional_config(base, "report.yml", DEFAULT_REPORT)
+    try:
+        risk = optional_config(base, "risk.yml", DEFAULT_RISK)
+        provider = optional_config(base, "provider.yml", DEFAULT_PROVIDER)
+        report_config = optional_config(base, "report.yml", DEFAULT_REPORT)
+    except Exception as exc:
+        issue = ValidationIssue("invalid-yaml", str(base), str(exc))
+        return {"error": "invalid-yaml", "message": "optional config validation failed", "issues": issues_payload([issue])}
     resolved_limits = resolve_limits(search_scope)
     candidates = generate_candidates(search_scope, resolved_limits)
     history_source = configured_history_source(base, configs["ingest.yml"])
-    candle_load = _load_candles_or_error(root, experiment, base, configs["ingest.yml"])
+    candle_load = _load_candles_or_error(root, experiment, base, configs["ingest.yml"], allow_synthetic)
     if isinstance(candle_load, dict):
         return candle_load
     history_context = history_data_context(history_source, len(candle_load.candles))
@@ -341,6 +356,7 @@ def _horizon_record(
     min_trades_per_hour: Any,
     target: dict[str, Any],
     result: dict[str, Any] | None,
+    require_positive_net_profit: bool,
     reused_primary: bool = False,
     reason: str | None = None,
 ) -> dict[str, Any]:
@@ -351,7 +367,7 @@ def _horizon_record(
     status = "insufficient-data"
     if reason is None and total_trades >= required_trades:
         positive_profit = float(metrics.get(METRIC_NET_PROFIT, 0.0)) > 0.0
-        status = "passed" if target_satisfied(metrics, target) and positive_profit else "failed"
+        status = "passed" if target_satisfied(metrics, target) and (positive_profit or not require_positive_net_profit) else "failed"
     return {
         "candidateId": candidate["candidateId"],
         "horizonDays": days,
@@ -425,18 +441,19 @@ def _evaluate_horizons(
     primary_days = int(config.get("primary-window-days", 7))
     end_value = setup.configs["ingest.yml"].get("data", {}).get("to")
     min_trades_per_hour = config.get("min-trades-per-hour", 0.0)
+    require_positive_net_profit = bool(config.get("gate", {}).get("require-positive-net-profit", True))
     records: list[dict[str, Any]] = []
     strategy = compile_candidate_strategy(candidate)
     for days in days_values:
         if days == primary_days:
-            record = _horizon_record(candidate, days, end_value, min_trades_per_hour, target, primary_result, reused_primary=True)
+            record = _horizon_record(candidate, days, end_value, min_trades_per_hour, target, primary_result, require_positive_net_profit, reused_primary=True)
         else:
             candles = _window_candles(setup.candles, end_value, days)
             if not candles:
-                record = _horizon_record(candidate, days, end_value, min_trades_per_hour, target, None, reason="no-candles-in-window")
+                record = _horizon_record(candidate, days, end_value, min_trades_per_hour, target, None, require_positive_net_profit, reason="no-candles-in-window")
             else:
                 result = run_m1_backtest(candles, strategy=strategy, risk_config=setup.risk)
-                record = _horizon_record(candidate, days, end_value, min_trades_per_hour, target, result)
+                record = _horizon_record(candidate, days, end_value, min_trades_per_hour, target, result, require_positive_net_profit)
         records.append(record)
     return records, _horizon_summary(records, config, str(target["metric"]))
 
@@ -693,12 +710,12 @@ def _persist_run(root: Path, experiment: str, mode: str, resolved_run_id: str, s
     complete_run(directory, final_metrics, render_run_report(experiment, resolved_run_id, final_metrics, manifest))
 
 
-def run_backtest(root: Path, experiment: str, mode: str, run_id: str | None, dry_run: bool = False) -> dict[str, Any]:
+def run_backtest(root: Path, experiment: str, mode: str, run_id: str | None, dry_run: bool = False, allow_synthetic: bool = False) -> dict[str, Any]:
     resolved = _resolve_run_id(mode, run_id)
     if isinstance(resolved, dict):
         return resolved
     resolved_run_id = resolved
-    setup = _load_run_setup(root, experiment)
+    setup = _load_run_setup(root, experiment, allow_synthetic)
     if isinstance(setup, dict):
         return setup
     result = _run_candidate_search(setup, mode, resolved_run_id)
@@ -720,14 +737,14 @@ def list_runs(root: Path, experiment: str) -> dict[str, Any]:
 
 
 def show_run(root: Path, experiment: str, run_id: str) -> dict[str, Any]:
-    directory = run_dir(root, experiment, run_id)
-    if not directory.exists():
-        return {"error": "missing-artifact", "message": "run not found"}
-    return {"experiment": experiment, "runId": run_id, "path": str(directory), "metrics": load_metrics(directory)}
+    loaded = completed_run(root, experiment, run_id)
+    if "error" in loaded:
+        return loaded
+    return {"experiment": experiment, "runId": run_id, "path": loaded["path"], "metrics": loaded["metrics"], "manifest": loaded["manifest"]}
 
 
 def validate_run(root: Path, experiment: str, run_id: str) -> dict[str, Any]:
-    issues = validate_run_dir(run_dir(root, experiment, run_id))
+    issues = validate_run_dir(run_dir(root, experiment, run_id), expected_experiment=experiment)
     if issues:
         return {"valid": False, "issues": issues_payload(issues)}
     return {"experiment": experiment, "runId": run_id, "valid": True}

@@ -6,6 +6,7 @@ from typing import Any
 from xenibe.artifacts.store import experiment_dir, make_run_id, utc_now, write_json
 
 from forge.common import relative_files, run_dir
+from forge.run_consumer import completed_run
 
 
 def _export_payload(kind: str, source: Path, experiment: str, run_id: str | None = None) -> dict[str, Any]:
@@ -35,8 +36,9 @@ def export_experiment(root: Path, experiment: str, dry_run: bool = False) -> dic
 
 def export_run(root: Path, experiment: str, run_id: str, dry_run: bool = False) -> dict[str, Any]:
     source = run_dir(root, experiment, run_id)
-    if not source.exists():
-        return {"error": "missing-artifact", "message": "run not found"}
+    loaded = completed_run(root, experiment, run_id)
+    if "error" in loaded:
+        return loaded
     target = root / "promoted" / experiment / "portable" / f"run-{experiment}-{run_id}-{make_run_id('sim')}.json"
     metadata = _export_payload("run", source, experiment, run_id)
     payload: dict[str, Any] = {"experiment": experiment, "runId": run_id, "export": str(target), "metadata": metadata}

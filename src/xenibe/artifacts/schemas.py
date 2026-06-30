@@ -21,6 +21,12 @@ EXPERIMENT_FILES = (
     "search-scope.yml",
 )
 
+CANONICAL_CONTEXT_PATHS = {
+    "promoted": "promoted",
+    "archived": "archived",
+    "experiment": "experiment",
+}
+
 RUN_ARTIFACTS = (
     "manifest.json",
     "config-snapshot.yml",
@@ -51,6 +57,10 @@ RUN_JSONL_FILES = (
     "rounds.jsonl",
     "reflections.jsonl",
 )
+
+RUN_MODES = ("backtest",)
+RUN_STATUS_VALUES = ("running", "completed", "failed")
+RUN_ID_MODE_PREFIXES = {"backtest": "bt"}
 
 DETAIL_JSONL_FILES = (
     "signals.jsonl",
@@ -145,7 +155,7 @@ DEFAULT_INGEST = {
     },
 }
 
-DEFAULT_SEARCHSCOPE = {
+DEFAULT_SEARCH_SCOPE = {
     "schema-version": 1,
     "flow": list(CANONICAL_SEARCH_FLOW),
     "limits": {

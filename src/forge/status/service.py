@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from forge.common import issues_payload, load_metrics, select_metrics
-from xenibe.artifacts.store import ValidationIssue, experiment_dir, experiments_root, load_json, validate_config, validate_experiment_dir
+from xenibe.artifacts.schemas import DETAIL_JSONL_FILES, RUN_ARTIFACTS
+from xenibe.artifacts.store import ValidationIssue, experiment_dir, experiments_root, load_json, validate_config, validate_experiment_dir, validate_run_dir
 
 
 SUMMARY_METRICS = ("win-rate", "net-profit", "total-trades", "winning-candidate", "best-candidate")
-RUN_ARTIFACTS = ("manifest.json", "scoreboard.json", "candidates.jsonl", "metrics.json", "report.md")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -23,6 +23,12 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _artifact_paths(paths: dict[str, Path]) -> dict[str, str]:
     return {name: str(path) for name, path in paths.items() if path.exists()}
+
+
+def _artifact_key(filename: str) -> str:
+    stem = filename.removesuffix(".json").removesuffix(".jsonl").removesuffix(".yml").removesuffix(".md")
+    parts = stem.split("-")
+    return parts[0] + "".join(part.title() for part in parts[1:])
 
 
 def _experiment_names(root: Path) -> list[str]:
@@ -62,12 +68,22 @@ def _scoreboard_summary(path: Path) -> dict[str, Any]:
 
 def run_summary(run_directory: Path) -> dict[str, Any]:
     manifest = _load_json(run_directory / "manifest.json")
-    metrics = load_metrics(run_directory)
+    try:
+        metrics = load_metrics(run_directory)
+    except Exception:
+        metrics = {}
+    expected_experiment = run_directory.parent.parent.name if run_directory.parent.name == "runs" else None
+    issues = validate_run_dir(run_directory, expected_experiment=expected_experiment)
     summary: dict[str, Any] = {
         "runId": str(manifest.get("runId") or run_directory.name),
         "path": str(run_directory),
-        "artifactPaths": _artifact_paths({name.removesuffix(".json").removesuffix(".jsonl").removesuffix(".md"): run_directory / name for name in RUN_ARTIFACTS}),
+        "artifactPaths": _artifact_paths({_artifact_key(name): run_directory / name for name in (*RUN_ARTIFACTS, *DETAIL_JSONL_FILES)}),
     }
+    if issues:
+        summary["valid"] = False
+        summary["issues"] = issues_payload(issues)
+    else:
+        summary["valid"] = True
     for key in ("mode", "status", "createdAt", "completedAt", "searchState", "winnerCandidate", "bestCandidate"):
         if manifest.get(key) is not None:
             summary[key] = manifest[key]
@@ -84,7 +100,7 @@ def _experiment_artifact_paths(base: Path) -> dict[str, str]:
         "experiment": base,
         "experimentYaml": base / "experiment.yml",
         "ingestYaml": base / "ingest.yml",
-        "searchScopeYaml": base / "search-scope.yml",
+        "candidateSearchYaml": base / "search-scope.yml",
         "data": base / "data",
         "runs": base / "runs",
         "scopeRevisions": base / "scope-revisions.jsonl",
@@ -96,11 +112,12 @@ def _experiment_summary(root: Path, name: str) -> dict[str, Any]:
     base = experiment_dir(root, name)
     issues = validate_experiment_dir(base)
     latest_runs = [run_summary(path) for path in _latest_run_dirs(base)[:3]]
+    run_issues = [ValidationIssue(str(issue["code"]), str(issue.get("path") or issue.get("target") or run["path"]), str(issue["message"])) for run in latest_runs for issue in run.get("issues", [])]
     return {
         "name": name,
         "path": str(base),
-        "valid": not issues,
-        "issues": issues_payload(issues),
+        "valid": not issues and not run_issues,
+        "issues": issues_payload([*issues, *run_issues]),
         "artifactPaths": _experiment_artifact_paths(base),
         "latestRunIds": [run["runId"] for run in latest_runs],
         "latestRuns": latest_runs,

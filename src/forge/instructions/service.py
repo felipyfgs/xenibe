@@ -6,12 +6,12 @@ from typing import Any
 
 from forge.common import issues_payload, relative_files
 from forge.status.service import run_summary
+from xenibe.artifacts.schemas import DETAIL_JSONL_FILES, RUN_ARTIFACTS
 from xenibe.artifacts.store import ValidationIssue, experiment_dir, experiments_root, load_experiment, load_json, load_yaml, validate_config, validate_experiment_dir
 from xenibe.metrics.summary import METRIC_NET_PROFIT
-from xenibe.strategy import resolve_limits, target_satisfied
+from xenibe.strategy import candidate_allows_target_hit, rank_candidates, resolve_limits, target_satisfied
 
 
-RUN_CONTEXT_FILES = ("manifest.json", "scoreboard.json", "candidates.jsonl", "metrics.json", "report.md")
 TERMINAL_LIMIT_STATES = {"limits-exhausted", "max-rounds", "stagnation"}
 
 
@@ -41,28 +41,27 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return records
 
 
+def _artifact_key(filename: str) -> str:
+    stem = filename.removesuffix(".json").removesuffix(".jsonl").removesuffix(".yml").removesuffix(".md")
+    parts = stem.split("-")
+    return parts[0] + "".join(part.title() for part in parts[1:])
+
+
 def _artifact_paths(base: Path, latest_run: Path | None = None) -> dict[str, str]:
     paths: dict[str, Path] = {
         "root": base.parent.parent,
         "experiment": base,
         "experimentYaml": base / "experiment.yml",
         "ingestYaml": base / "ingest.yml",
-        "searchScopeYaml": base / "search-scope.yml",
+        "candidateSearchYaml": base / "search-scope.yml",
         "data": base / "data",
         "runs": base / "runs",
         "scopeRevisions": base / "scope-revisions.jsonl",
     }
     if latest_run is not None:
-        paths.update(
-            {
-                "latestRun": latest_run,
-                "manifest": latest_run / "manifest.json",
-                "scoreboard": latest_run / "scoreboard.json",
-                "candidates": latest_run / "candidates.jsonl",
-                "metrics": latest_run / "metrics.json",
-                "report": latest_run / "report.md",
-            }
-        )
+        paths["latestRun"] = latest_run
+        for filename in (*RUN_ARTIFACTS, *DETAIL_JSONL_FILES):
+            paths[_artifact_key(filename)] = latest_run / filename
     return {name: str(path) for name, path in paths.items() if path.exists()}
 
 
@@ -80,7 +79,7 @@ def _context_files(base: Path, latest_run: Path | None = None) -> dict[str, list
         "revisions": [base / "scope-revisions.jsonl"],
     }
     if latest_run is not None:
-        files["latestRun"] = [latest_run / name for name in RUN_CONTEXT_FILES]
+        files["latestRun"] = [latest_run / name for name in (*RUN_ARTIFACTS, *DETAIL_JSONL_FILES)]
     return {key: [str(path) for path in paths if path.exists()] for key, paths in files.items() if any(path.exists() for path in paths)}
 
 
@@ -99,13 +98,6 @@ def _latest_completed_run(base: Path) -> Path | None:
     return None
 
 
-def _candidate_key(record: dict[str, Any], target_metric: str) -> tuple[float, float]:
-    metrics = record.get("metrics", {})
-    if not isinstance(metrics, dict):
-        metrics = {}
-    return (float(metrics.get(target_metric, 0.0)), float(metrics.get(METRIC_NET_PROFIT, 0.0)))
-
-
 def _candidate_summary(record: dict[str, Any], target_metric: str, run_id: str) -> dict[str, Any]:
     metrics = record.get("metrics", {})
     if not isinstance(metrics, dict):
@@ -121,24 +113,23 @@ def _candidate_summary(record: dict[str, Any], target_metric: str, run_id: str) 
         "status": record.get("status"),
         "targetMetric": target_metric,
         "metrics": {key: value for key, value in selected_metrics.items() if value is not None},
+        "horizonValidation": record.get("horizonValidation"),
         "candidateFingerprint": record.get("candidateFingerprint"),
         "evaluationFingerprint": record.get("evaluationFingerprint"),
     }
 
 
 def _best_candidate(run_directory: Path, target_metric: str) -> dict[str, Any] | None:
-    candidates = [
-        record
-        for record in _read_jsonl(run_directory / "candidates.jsonl")
-        if record.get("classification") != "skipped" and record.get("status") != "skipped-duplicate"
-    ]
-    if not candidates:
-        scoreboard = _load_json(run_directory / "scoreboard.json")
-        ranked = scoreboard.get("rankings", {}).get("candidates", [])
+    candidates: list[dict[str, Any]] = []
+    scoreboard = _load_json(run_directory / "scoreboard.json")
+    ranked = scoreboard.get("rankings", {}).get("candidates", [])
+    if isinstance(ranked, list):
         candidates = [record for record in ranked if isinstance(record, dict)]
     if not candidates:
+        candidates = rank_candidates(_read_jsonl(run_directory / "candidates.jsonl"), target_metric)
+    if not candidates:
         return None
-    best = max(candidates, key=lambda record: _candidate_key(record, target_metric))
+    best = candidates[0]
     return _candidate_summary(best, target_metric, run_directory.name)
 
 
@@ -166,7 +157,7 @@ def _blocked_data(root: Path, experiment: str, state: str, issues: list[Validati
     }
 
 
-def _next_actions(root: Path, experiment: str, state: str) -> list[str]:
+def _next_actions(root: Path, experiment: str, state: str, run_id: str | None = None) -> list[str]:
     if state == "missing-root":
         return [f"forge status --root {root} --json", f"forge init --root {root} --json"]
     if state == "no-experiments":
@@ -174,9 +165,10 @@ def _next_actions(root: Path, experiment: str, state: str) -> list[str]:
     if state == "blocked":
         return [f"repair reported artifacts under {experiment_dir(root, experiment)}", f"forge validate --root {root} --json"]
     if state == "target-hit":
-        return [f"forge promote run {experiment} <run-id> --root {root} --json", f"forge report show {experiment} <run-id> --root {root} --json"]
+        selected = run_id or "<run-id>"
+        return [f"forge run promote {experiment} {selected} --root {root} --json", f"forge report show {experiment} {selected} --root {root} --json"]
     if state == "limits-exhausted":
-        return [f"revise {experiment_dir(root, experiment) / 'search-scope.yml'} or archive the experiment", f"forge compare runs {experiment} <run-id-a> <run-id-b> --root {root} --json"]
+        return [f"revise {experiment_dir(root, experiment) / 'search-scope.yml'} or archive the experiment", f"forge run compare {experiment} <run-id-a> <run-id-b> --root {root} --json"]
     return [f"forge run backtest {experiment} --root {root} --json", f"forge validate --root {root} --json"]
 
 
@@ -184,9 +176,9 @@ def _state_from_run(latest_run: dict[str, Any] | None, best_candidate: dict[str,
     if latest_run is None:
         return "ready"
     search_state = latest_run.get("searchState")
-    if search_state == "target-hit":
+    if search_state == "target-hit" and candidate_allows_target_hit(best_candidate):
         return "target-hit"
-    if best_candidate is not None and target_satisfied(best_candidate.get("metrics", {}), target):
+    if best_candidate is not None and candidate_allows_target_hit(best_candidate) and target_satisfied(best_candidate.get("metrics", {}), target):
         return "target-hit"
     if search_state in TERMINAL_LIMIT_STATES:
         return "limits-exhausted"
@@ -237,12 +229,12 @@ def orchestrate(root: Path, experiment: str) -> tuple[dict[str, Any], list[str],
         "latestRuns": latest_runs,
         "bestCandidate": best_candidate,
         "revisionContext": _revision_context(base),
-        "searchScope": {
+        "candidateSearch": {
             "path": str(base / "search-scope.yml"),
             "flow": search_scope.get("flow", []),
         },
     }
-    return data, _next_actions(root, experiment, state), True
+    return data, _next_actions(root, experiment, state, latest_run_dir.name if latest_run_dir is not None else None), True
 
 
 def read_search_scope(path: Path) -> dict[str, Any]:

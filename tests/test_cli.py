@@ -43,7 +43,7 @@ class CliTests(unittest.TestCase):
 
     def test_init_scaffolds_minimal_root_and_validates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "forge" / "robo-LKSJDLKKL"
+            root = Path(tmp) / "forge" / "robo-lksjdlkkk"
             code, response = run_cli(["init", "--root", str(root)])
 
             self.assertEqual(code, 0, response)
@@ -75,7 +75,7 @@ class CliTests(unittest.TestCase):
 
     def test_init_is_idempotent_and_preserves_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "forge" / "robo-LKSJDLKKL"
+            root = Path(tmp) / "forge" / "robo-lksjdlkkk"
             root.mkdir(parents=True)
             config = root / "config.yml"
             config.write_text("", encoding="utf-8")
@@ -146,6 +146,34 @@ class CliTests(unittest.TestCase):
         self.assertFalse(experiments["invalid-experiment"]["valid"])
         self.assertTrue(experiments["invalid-experiment"]["issues"])
 
+    def test_run_consumers_reject_incomplete_and_status_reports_corrupt_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            copy_fixture("valid-experiment", root / "experiment" / "valid-experiment")
+            runs = root / "experiment" / "valid-experiment" / "runs"
+            runs.mkdir()
+            incomplete = runs / "bt-20260101-000000"
+            incomplete.mkdir()
+            (incomplete / "manifest.json").write_text('{"runId":"bt-20260101-000000","experiment":"valid-experiment","mode":"backtest","status":"completed","createdAt":"2026-01-01T00:00:00Z"}\n', encoding="utf-8")
+
+            export_code, export_response = run_cli(["run", "export", "valid-experiment", "bt-20260101-000000", "--root", str(root)])
+            validate_code, validate_response = run_cli(["validate", "--root", str(root)])
+
+            shutil.rmtree(incomplete)
+            copy_fixture("valid-run/bt-20260101-000000", incomplete)
+            (incomplete / "metrics.json").write_text("{bad-json\n", encoding="utf-8")
+            status_code, status_response = run_cli(["status", "--root", str(root)])
+
+        self.assertNotEqual(export_code, 0)
+        self.assertEqual(export_response["status"][0]["code"], "invalid-artifact")
+        self.assertNotEqual(validate_code, 0)
+        self.assertTrue(validate_response["data"]["issues"])
+        self.assertEqual(status_code, 0, status_response)
+        run_summary = status_response["data"]["experiments"][0]["latestRuns"][0]
+        self.assertFalse(run_summary["valid"])
+        self.assertTrue(any(issue["code"] == "invalid-json" for issue in run_summary["issues"]))
+
     def test_instructions_report_target_hit_and_best_candidate_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -166,6 +194,36 @@ class CliTests(unittest.TestCase):
         self.assertIn("latestRun", response["data"]["contextFiles"])
         self.assertIn("scoreboard", response["data"]["artifactPaths"])
         self.assertEqual(before, after)
+
+    def test_instructions_prefers_scoreboard_and_ignores_horizon_failed_target_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            experiment = root / "experiment" / "valid-experiment"
+            copy_fixture("valid-experiment", experiment)
+            runs = experiment / "runs"
+            runs.mkdir()
+            run_dir = runs / "bt-20260101-000000"
+            copy_fixture("valid-run/bt-20260101-000000", run_dir)
+            scoreboard = json.loads((run_dir / "scoreboard.json").read_text(encoding="utf-8"))
+            scoreboard["rankings"]["candidates"] = [
+                {
+                    "rank": 1,
+                    "candidateId": "candidate-000002",
+                    "classification": "winner",
+                    "status": "target-hit",
+                    "metrics": {"win-rate": 1.0, "net-profit": 8.0},
+                    "horizonValidation": {"status": "failed"},
+                },
+                scoreboard["rankings"]["candidates"][0],
+            ]
+            (run_dir / "scoreboard.json").write_text(json.dumps(scoreboard), encoding="utf-8")
+
+            code, response = run_cli(["instructions", "orchestrate", "valid-experiment", "--root", str(root)])
+
+        self.assertEqual(code, 0, response)
+        self.assertEqual(response["data"]["bestCandidate"]["candidateId"], "candidate-000002")
+        self.assertNotEqual(response["data"]["state"], "target-hit")
 
     def test_instructions_missing_root_and_invalid_experiment_fail_structured(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,7 +248,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
             self.assertEqual(run_cli(["experiment", "validate", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
-            code, response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--root", str(root), "--run-id", "bt-20260101-000000"])
+            missing_code, missing_response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--root", str(root), "--run-id", "bt-20260101-000000"])
+            code, response = run_cli(["run", "backtest", "idx-m1-soros-reversal", "--allow-synthetic", "--root", str(root), "--run-id", "bt-20260101-000000"])
             run_dir = root / "experiment" / "idx-m1-soros-reversal" / "runs" / "bt-20260101-000000"
             self.assertTrue((run_dir / "scoreboard.json").exists())
             self.assertTrue((run_dir / "rounds.jsonl").exists())
@@ -198,6 +257,9 @@ class CliTests(unittest.TestCase):
             inputs = json.loads((run_dir / "inputs.json").read_text(encoding="utf-8"))
             self.assertEqual(run_cli(["run", "validate", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
 
+        self.assertNotEqual(missing_code, 0)
+        self.assertEqual(missing_response["status"][0]["code"], "missing-artifact")
+        self.assertTrue(any("--allow-synthetic" in action for action in missing_response["nextActions"]))
         self.assertEqual(code, 0)
         self.assertEqual(response["data"]["runId"], "bt-20260101-000000")
         self.assertIn("win-rate", response["data"]["metrics"])
@@ -207,6 +269,42 @@ class CliTests(unittest.TestCase):
         self.assertEqual(inputs["history"]["dataSource"], "synthetic-default")
         self.assertEqual(inputs["execution"]["payoutSource"], "fixed-default")
         self.assertFalse(inputs["execution"]["maxSecondsEnforced"])
+
+    def test_simulate_command_is_not_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "new", "idx-m1-soros-reversal", "--root", str(root)])[0], 0)
+
+            code, response = run_cli(["run", "simulate", "idx-m1-soros-reversal", "--allow-synthetic", "--run-id", "sim-20260101-000000", "--root", str(root)])
+
+        self.assertNotEqual(code, 0)
+        self.assertEqual(response["status"][0]["code"], "unknown-command")
+
+    def test_partial_risk_merges_defaults_and_optional_yaml_errors_are_structured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(run_cli(["init", "--root", str(root)])[0], 0)
+            self.assertEqual(run_cli(["experiment", "new", "partial-risk", "--root", str(root)])[0], 0)
+            risk_path = root / "experiment" / "partial-risk" / "risk.yml"
+            risk_path.write_text("balance: 500\n", encoding="utf-8")
+            run_code, run_response = run_cli(["run", "backtest", "partial-risk", "--allow-synthetic", "--run-id", "bt-20260101-000000", "--root", str(root)])
+            snapshot = load_yaml(root / "experiment" / "partial-risk" / "runs" / "bt-20260101-000000" / "config-snapshot.yml")
+
+            malformed_results = []
+            for filename in ("risk.yml", "provider.yml", "report.yml"):
+                name = f"bad-{filename.removesuffix('.yml')}"
+                self.assertEqual(run_cli(["experiment", "new", name, "--root", str(root)])[0], 0)
+                (root / "experiment" / name / filename).write_text("bad: [\n", encoding="utf-8")
+                malformed_results.append(run_cli(["run", "backtest", name, "--allow-synthetic", "--root", str(root)]))
+
+        self.assertEqual(run_code, 0, run_response)
+        self.assertEqual(snapshot["risk"]["balance"], 500)
+        self.assertIn("stake", snapshot["risk"])
+        for code, response in malformed_results:
+            self.assertNotEqual(code, 0)
+            self.assertEqual(response["status"][0]["code"], "invalid-yaml")
+            self.assertTrue(response["data"]["issues"])
 
 
 if __name__ == "__main__":
