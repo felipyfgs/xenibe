@@ -25,7 +25,7 @@ from xenibe.artifacts.store import (
     write_json,
 )
 from xenibe.artifacts.schemas import DEFAULT_PROVIDER, DEFAULT_REPORT
-from xenibe.backtest import run_m1_backtest
+from xenibe.backtest import DEFAULT_BACKTEST_PAYOUT, run_m1_backtest
 from xenibe.candles import Candle
 from xenibe.metrics.summary import METRIC_NET_PROFIT, calculate_trade_metrics
 from xenibe.risk import DEFAULT_RISK
@@ -46,6 +46,12 @@ class RunSetup:
     candidates: list[dict[str, Any]]
     candles: list[Candle]
     history_context: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CandleLoad:
+    candles: list[Candle]
+    source_kind: str
 
 
 @dataclass
@@ -237,14 +243,14 @@ def _resolve_run_id(mode: str, run_id: str | None) -> dict[str, Any] | str:
     return resolved_run_id
 
 
-def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict[str, Any]) -> dict[str, Any] | list[Candle]:
+def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict[str, Any]) -> CandleLoad | dict[str, Any]:
     candles = load_history_candles(base, ingest)
     if candles:
-        return candles
+        return CandleLoad(candles, "configured-history")
     source = configured_history_source(base, ingest)
     history_files = configured_history_files(source)
     if not history_files:
-        return default_candles()
+        return CandleLoad(default_candles(), "synthetic-default")
     ingest_data = ingest.get("data", {})
     return {
         "error": "missing-artifact",
@@ -276,11 +282,14 @@ def _load_run_setup(root: Path, experiment: str) -> RunSetup | dict[str, Any]:
     resolved_limits = resolve_limits(search_scope)
     candidates = generate_candidates(search_scope, resolved_limits)
     history_source = configured_history_source(base, configs["ingest.yml"])
-    candles = _load_candles_or_error(root, experiment, base, configs["ingest.yml"])
-    if isinstance(candles, dict):
-        return candles
-    history_context = history_data_context(history_source, len(candles))
-    return RunSetup(base, configs, search_scope, risk, provider, report_config, resolved_limits, candidates, candles, history_context)
+    candle_load = _load_candles_or_error(root, experiment, base, configs["ingest.yml"])
+    if isinstance(candle_load, dict):
+        return candle_load
+    history_context = history_data_context(history_source, len(candle_load.candles))
+    history_context["dataSource"] = candle_load.source_kind
+    if candle_load.source_kind == "synthetic-default":
+        history_context["synthetic"] = True
+    return RunSetup(base, configs, search_scope, risk, provider, report_config, resolved_limits, candidates, candle_load.candles, history_context)
 
 
 def _duplicate_record(candidate: dict[str, Any], prior: dict[str, Any]) -> dict[str, Any]:
@@ -591,7 +600,38 @@ def _final_metrics(result: SearchResult) -> dict[str, Any]:
     return metrics
 
 
-def _run_payload(experiment: str, resolved_run_id: str, directory: Path, metrics: dict[str, Any], result: SearchResult) -> dict[str, Any]:
+def _execution_context(setup: RunSetup) -> dict[str, Any]:
+    return {
+        "payout": DEFAULT_BACKTEST_PAYOUT,
+        "payoutSource": "fixed-default",
+        "maxSeconds": setup.resolved_limits.get("max-seconds"),
+        "maxSecondsEnforced": False,
+        "dataSource": setup.history_context.get("dataSource"),
+    }
+
+
+def _run_limitations(setup: RunSetup) -> list[dict[str, Any]]:
+    limitations = [
+        {
+            "code": "fixed-payout",
+            "message": f"Backtests currently use fixed payout {DEFAULT_BACKTEST_PAYOUT}.",
+        },
+        {
+            "code": "max-seconds-not-enforced",
+            "message": "search-scope limits.max-seconds is recorded but not enforced.",
+        },
+    ]
+    if setup.history_context.get("dataSource") == "synthetic-default":
+        limitations.append(
+            {
+                "code": "synthetic-default-candles",
+                "message": "No configured history files were found; default synthetic candles were used.",
+            }
+        )
+    return limitations
+
+
+def _run_payload(experiment: str, resolved_run_id: str, directory: Path, metrics: dict[str, Any], result: SearchResult, setup: RunSetup) -> dict[str, Any]:
     return {
         "experiment": experiment,
         "runId": resolved_run_id,
@@ -599,6 +639,8 @@ def _run_payload(experiment: str, resolved_run_id: str, directory: Path, metrics
         "metrics": metrics,
         "searchState": result.search_state,
         "bestCandidate": result.best_record.get("candidateId") if result.best_record else None,
+        "execution": _execution_context(setup),
+        "limitations": _run_limitations(setup),
     }
 
 
@@ -622,6 +664,8 @@ def _persist_run(root: Path, experiment: str, mode: str, resolved_run_id: str, s
             "candidateCount": len(setup.candidates),
             "batchCount": len(result.round_records),
             "history": setup.history_context,
+            "execution": _execution_context(setup),
+            "limitations": _run_limitations(setup),
             "horizonValidation": setup.search_scope.get("horizon-validation"),
             "searchState": result.search_state,
         },
@@ -660,7 +704,7 @@ def run_backtest(root: Path, experiment: str, mode: str, run_id: str | None, dry
     result = _run_candidate_search(setup, mode, resolved_run_id)
     final_metrics = _final_metrics(result)
     directory = run_dir(root, experiment, resolved_run_id)
-    payload = _run_payload(experiment, resolved_run_id, directory, final_metrics, result)
+    payload = _run_payload(experiment, resolved_run_id, directory, final_metrics, result, setup)
     if dry_run:
         payload["plannedActions"] = ["persist resolved limits", "create run artifacts", "append candidate batches, round, and reflection records", "write scoreboard, metrics, and report"]
         if _horizon_config(setup.search_scope) is not None:

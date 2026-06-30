@@ -5,9 +5,9 @@ from dataclasses import asdict
 from typing import Any
 
 from xenibe.analysis import AnalysisContext, Evaluation, evaluate_component, supported_component
-from xenibe.artifacts.schemas import canonical_role
 from xenibe.candles import Candle
 from xenibe.execution import Signal
+from xenibe.strategy.components import canonical_role
 
 
 class UnsupportedComponentError(ValueError):

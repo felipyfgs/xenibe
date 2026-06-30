@@ -24,6 +24,7 @@ SESSION_ARTIFACT_FIELDS = (
     "sessionClosed",
     "sessionCloseReason",
 )
+DEFAULT_BACKTEST_PAYOUT = 0.8
 
 
 def default_strategy(closed_candles: Sequence[Candle], decision_index: int) -> Signal | None:
@@ -68,7 +69,7 @@ def run_m1_backtest(
     candles: Sequence[Candle],
     strategy: Strategy | None = None,
     risk_config: dict[str, Any] | None = None,
-    payout: float = 0.8,
+    payout: float = DEFAULT_BACKTEST_PAYOUT,
     decision_second: int = 0,
     tie_policy: str = "refund",
 ) -> dict[str, Any]:

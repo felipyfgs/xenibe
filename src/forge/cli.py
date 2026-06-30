@@ -9,6 +9,7 @@ from typing import Any
 from forge import __version__
 from forge.archive import command as archive_command
 from forge.assets import command as assets_command
+from forge.catalog import COMMAND_NAMES, DISPATCH_COMMAND_NAMES, render_help
 from forge.compare import command as compare_command
 from forge.context import CommandContext, ProviderFactory
 from forge.experiment import command as experiment_command
@@ -25,36 +26,7 @@ from forge.validate import command as validate_command
 from xenibe.artifacts.store import ImmutableRunError, init_artifact_root
 
 
-HELP_TEXT = """forge - Xenibe experiment lab
-
-Usage:
-  forge [global options] <command> [args]
-
-Global options:
-  --root <path>   Artifact root
-  --json          Emit JSON response envelope
-  --dry-run       Plan without filesystem mutation
-  --yes           Assume yes for confirmations
-  --no-color      Disable colored text
-  --version       Show version
-  --help          Show this help
-
-Commands:
-  forge init
-  forge validate
-  forge status
-  forge instructions orchestrate
-  forge experiment new|list|show|validate
-  forge run backtest|simulate|list|show|validate
-  forge report generate|show
-  forge compare runs
-  forge promote run
-  forge archive experiment
-  forge export run|experiment
-  forge assets list
-  forge payout get
-  forge history download
-"""
+HELP_TEXT = render_help()
 
 
 @dataclass(frozen=True)
@@ -133,7 +105,7 @@ def dispatch(args: list[str], context_or_root: CommandContext | Path | None = No
     if not args:
         return fail("missing-command", "command required", ["forge init --json", "forge experiment list --json"])
     command = args[0]
-    dispatchers = {
+    command_modules = {
         "experiment": experiment_command.dispatch,
         "run": run_command.dispatch,
         "report": report_command.dispatch,
@@ -148,6 +120,7 @@ def dispatch(args: list[str], context_or_root: CommandContext | Path | None = No
         "status": status_command.dispatch,
         "instructions": instructions_command.dispatch,
     }
+    dispatchers = {name: command_modules[name] for name in DISPATCH_COMMAND_NAMES}
     try:
         if command == "init":
             return _handle_init(context)
@@ -168,7 +141,7 @@ def _special_response(parsed: ParsedGlobal) -> dict[str, Any] | None:
     if parsed.show_version:
         return ok({"version": __version__}, [], "ok")
     if parsed.show_help:
-        return ok({"help": HELP_TEXT, "commands": ["init", "validate", "status", "instructions", "experiment", "run", "report", "compare", "promote", "archive", "export", "assets", "payout", "history"]}, [], "ok")
+        return ok({"help": HELP_TEXT, "commands": list(COMMAND_NAMES)}, [], "ok")
     return None
 
 

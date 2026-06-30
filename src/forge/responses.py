@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from forge.catalog import SUBCOMMANDS
+
 
 @dataclass(frozen=True)
 class Status:
@@ -13,21 +15,6 @@ class Status:
     message: str
     target: str | None = None
     fix: str | None = None
-
-
-SUBCOMMANDS = {
-    "archive": {"experiment"},
-    "assets": {"list"},
-    "compare": {"runs"},
-    "experiment": {"list", "new", "show", "validate"},
-    "export": {"experiment", "run"},
-    "history": {"download"},
-    "instructions": {"orchestrate"},
-    "payout": {"get"},
-    "promote": {"run"},
-    "report": {"generate", "show"},
-    "run": {"backtest", "list", "show", "simulate", "validate"},
-}
 
 
 def _status(status: Status) -> dict[str, str]:

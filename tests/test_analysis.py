@@ -9,10 +9,12 @@ from pathlib import Path
 from forge.run.service import run_backtest
 from xenibe.analysis import AnalysisContext, evaluate_component
 from xenibe.analysis import native
+from xenibe.analysis.registry import EVALUATORS
 from xenibe.artifacts.history import file_sha256
 from xenibe.artifacts.store import write_json, write_yaml
 from xenibe.candles import Candle
 from xenibe.strategy import UnsupportedComponentError, compile_candidate_strategy, evaluate_candidate_decision
+from xenibe.strategy.components import COMPONENT_PARAMETER_RULES
 
 
 def candle(index: int, open_price: float, close_price: float, low: float | None = None, high: float | None = None) -> Candle:
@@ -150,6 +152,15 @@ class NativeIndicatorTests(unittest.TestCase):
 
 
 class EvaluatorAndCompilerTests(unittest.TestCase):
+    def test_component_registry_matches_available_evaluators(self) -> None:
+        registered = {
+            (stage, component_type)
+            for stage, components in COMPONENT_PARAMETER_RULES.items()
+            for component_type in components
+        }
+
+        self.assertEqual(registered, set(EVALUATORS))
+
     def test_evaluator_uses_only_closed_context_candles(self) -> None:
         closed = bullish_candles(15)
         future_pinbar = candle(16, 1.0, 1.02, low=0.1, high=1.04)

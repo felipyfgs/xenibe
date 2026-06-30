@@ -9,12 +9,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from forge.catalog import COMMANDS, DISPATCH_COMMAND_NAMES, SUBCOMMANDS
 from forge.cli import main
 from forge.context import CommandContext
+from forge.responses import SUBCOMMANDS as RESPONSE_SUBCOMMANDS
 from xenibe.artifacts.store import load_json, load_yaml
 
 
-FEATURES = ("archive", "assets", "compare", "experiment", "export", "history", "instructions", "payout", "promote", "report", "run", "status", "validate")
+FEATURES = DISPATCH_COMMAND_NAMES
 
 
 def run_cli(args: list[str], provider_factory=None) -> tuple[int, dict[str, Any]]:
@@ -55,6 +57,15 @@ class ExplodingProvider(MockProvider):
 
 
 class ForgeFeatureTests(unittest.TestCase):
+    def test_command_catalog_drives_help_features_and_metadata(self) -> None:
+        code, response = run_cli(["--help"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(response["data"]["commands"], [command.name for command in COMMANDS])
+        self.assertEqual(RESPONSE_SUBCOMMANDS, SUBCOMMANDS)
+        for command in COMMANDS:
+            self.assertIn(command.usage, response["data"]["help"])
+
     def test_feature_packages_import_and_dispatch_missing_command(self) -> None:
         context = CommandContext(root=Path("/tmp/forge-test"))
         for feature in FEATURES:

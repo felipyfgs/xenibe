@@ -178,6 +178,41 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn(str(experiment / "search-scope.yml") + ":components.trigger[1].parameters.unknown", paths)
         self.assertIn(str(experiment / "search-scope.yml") + ":components.decision", paths)
 
+    def test_search_scope_rejects_declared_but_unsupported_context_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_experiment(root, "idx-m1-soros-reversal")
+            experiment = root / "experiment" / "idx-m1-soros-reversal"
+            scope = load_yaml(experiment / "search-scope.yml")
+            scope["components"]["context"] = [{"type": "session", "parameters": {"name": ["london"]}}]
+            write_yaml(experiment / "search-scope.yml", scope)
+
+            issues = validate_experiment_dir(experiment)
+
+        self.assertIn(str(experiment / "search-scope.yml") + ":components.context[0].type", {issue.path for issue in issues})
+
+    def test_risk_validation_rejects_declared_but_unsupported_strategies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_experiment(root, "idx-m1-soros-reversal")
+            experiment = root / "experiment" / "idx-m1-soros-reversal"
+            write_yaml(
+                experiment / "risk.yml",
+                {
+                    "stop-loss": 15,
+                    "stop-win": 20,
+                    "soros": {"enabled": True, "levels": 2},
+                    "martingale": {"enabled": True, "max-steps": 1, "multiplier": 2},
+                },
+            )
+
+            issues = validate_experiment_dir(experiment)
+
+        paths = {issue.path for issue in issues}
+        self.assertIn(str(experiment / "risk.yml") + ":soros.levels", paths)
+        self.assertIn(str(experiment / "risk.yml") + ":martingale.enabled", paths)
+        self.assertIn(str(experiment / "risk.yml") + ":martingale.max-steps", paths)
+
     def test_horizon_validation_config_and_required_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

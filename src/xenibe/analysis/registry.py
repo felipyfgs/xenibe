@@ -5,8 +5,8 @@ from typing import Any
 
 from xenibe.analysis.context import AnalysisContext
 from xenibe.analysis.result import Evaluation, failed, passed, unavailable
-from xenibe.artifacts.schemas import canonical_role
 from xenibe.candles import Candle
+from xenibe.strategy.components import canonical_role
 
 
 Evaluator = Callable[[AnalysisContext, dict[str, Any], str, str], Evaluation]

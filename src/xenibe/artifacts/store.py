@@ -626,6 +626,8 @@ def _validate_risk_yaml(path: Path, data: dict[str, Any]) -> list[ValidationIssu
                 _check_bool(issues, path, "soros.enabled", soros.get("enabled"))
             if "levels" in soros and (not _is_int(soros.get("levels")) or int(soros["levels"]) <= 0):
                 issues.append(_issue(path, "soros.levels", "must be a positive integer"))
+            elif "levels" in soros and int(soros["levels"]) != 1:
+                issues.append(_issue(path, "soros.levels", "only Soros level 1 is currently supported"))
 
     martingale = data.get("martingale")
     if martingale is not None:
@@ -634,8 +636,12 @@ def _validate_risk_yaml(path: Path, data: dict[str, Any]) -> list[ValidationIssu
         else:
             if "enabled" in martingale:
                 _check_bool(issues, path, "martingale.enabled", martingale.get("enabled"))
+                if martingale.get("enabled") is True:
+                    issues.append(_issue(path, "martingale.enabled", "martingale is declared but not currently implemented"))
             if "max-steps" in martingale and (not _is_int(martingale.get("max-steps")) or int(martingale["max-steps"]) < 0):
                 issues.append(_issue(path, "martingale.max-steps", "must be a nonnegative integer"))
+            elif "max-steps" in martingale and int(martingale["max-steps"]) > 0:
+                issues.append(_issue(path, "martingale.max-steps", "martingale steps are declared but not currently implemented"))
             if "multiplier" in martingale:
                 _check_positive_number(issues, path, "martingale.multiplier", martingale.get("multiplier"))
     return issues

@@ -5,8 +5,8 @@ import json
 from itertools import product
 from typing import Any
 
-from xenibe.artifacts.schemas import CANONICAL_SEARCH_FLOW, LOOP_LIMIT_DEFAULTS, canonical_role
 from xenibe.metrics.summary import METRIC_NET_PROFIT
+from xenibe.strategy.components import CANONICAL_SEARCH_FLOW, LOOP_LIMIT_DEFAULTS, canonical_role
 
 
 def resolve_limits(searchscope: dict[str, Any], default_max_candidates: int = 25) -> dict[str, Any]:

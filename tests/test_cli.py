@@ -195,11 +195,18 @@ class CliTests(unittest.TestCase):
             self.assertTrue((run_dir / "scoreboard.json").exists())
             self.assertTrue((run_dir / "rounds.jsonl").exists())
             self.assertTrue((run_dir / "reflections.jsonl").exists())
+            inputs = json.loads((run_dir / "inputs.json").read_text(encoding="utf-8"))
             self.assertEqual(run_cli(["run", "validate", "idx-m1-soros-reversal", "bt-20260101-000000", "--root", str(root)])[0], 0)
 
         self.assertEqual(code, 0)
         self.assertEqual(response["data"]["runId"], "bt-20260101-000000")
         self.assertIn("win-rate", response["data"]["metrics"])
+        self.assertEqual(response["data"]["execution"]["payout"], 0.8)
+        self.assertEqual(response["data"]["execution"]["dataSource"], "synthetic-default")
+        self.assertIn("synthetic-default-candles", {item["code"] for item in response["data"]["limitations"]})
+        self.assertEqual(inputs["history"]["dataSource"], "synthetic-default")
+        self.assertEqual(inputs["execution"]["payoutSource"], "fixed-default")
+        self.assertFalse(inputs["execution"]["maxSecondsEnforced"])
 
 
 if __name__ == "__main__":
