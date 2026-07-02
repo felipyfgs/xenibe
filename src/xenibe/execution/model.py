@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -29,3 +30,18 @@ class Trade:
     profit: float
     entry_index: int
     settle_index: int
+
+
+def ebinex_candle_expiry_execution(timeframe: str) -> dict[str, Any]:
+    return {
+        "executionModel": "ebinex-candle-expiry",
+        "provider": "ebinex",
+        "timeframe": timeframe,
+        "historyPolicy": "closed-candles-before-submission-candle",
+        "submission": {
+            "candle": "current-timeframe-candle",
+            "cutoff": {"policy": "before-candle-boundary", "secondsBeforeClose": 5},
+        },
+        "contract": {"candle": "next-timeframe-candle", "entry": "open"},
+        "settlement": {"policy": "contract-candle-close", "candle": "contract-candle"},
+    }

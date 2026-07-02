@@ -6,7 +6,7 @@ from typing import Any
 
 from xenibe.candles import Candle
 from xenibe.execution import Order, Signal, Trade
-from xenibe.metrics.summary import calculate_trade_metrics
+from xenibe.metrics.summary import calculate_backtest_metrics
 from xenibe.risk import DEFAULT_RISK, RiskManager
 
 Strategy = Callable[[Sequence[Candle], int], Signal | dict[str, Any] | None]
@@ -20,9 +20,13 @@ SESSION_ARTIFACT_FIELDS = (
     "sessionBaseStake",
     "sessionStakeDivisor",
     "sorosPending",
+    "sorosLevel",
+    "sorosProfit",
     "sorosActive",
+    "martingaleStep",
     "sessionClosed",
     "sessionCloseReason",
+    "sessionOutcome",
 )
 DEFAULT_BACKTEST_PAYOUT = 0.8
 
@@ -104,8 +108,12 @@ def run_m1_backtest(
                 "orderId": order.order_id,
                 "side": order.side,
                 "stake": order.stake,
+                "submissionIndex": order.decision_index,
                 "decisionIndex": order.decision_index,
+                "contractIndex": order.entry_index,
                 "entryIndex": order.entry_index,
+                "entryPolicy": "next-candle-open",
+                "settlementPolicy": "contract-candle-close",
                 **session_artifact_fields(order_risk_state),
             }
         )
@@ -129,12 +137,14 @@ def run_m1_backtest(
                 "payout": trade.payout,
                 "result": trade.result,
                 "profit": trade.profit,
+                "contractIndex": trade.entry_index,
                 "entryIndex": trade.entry_index,
                 "settleIndex": trade.settle_index,
+                "settlementPolicy": "contract-candle-close",
                 **session_artifact_fields(risk_state),
             }
         )
         equity.append({"settleIndex": trade.settle_index, **risk_state})
 
-    metrics = calculate_trade_metrics(trades)
+    metrics = calculate_backtest_metrics(trades, blocks)
     return {"signals": signals, "orders": orders, "trades": trades, "blocks": blocks, "equity": equity, "metrics": metrics}

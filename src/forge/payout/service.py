@@ -17,5 +17,5 @@ def get_payout(context: CommandContext, asset: str) -> dict[str, Any]:
     except Exception as exc:
         return provider_error_payload(exc)
     metadata = provider_metadata(provider)
-    freshness = "offline" if metadata["mode"] == "offline-contract" else ("unavailable" if payout is None else "live")
+    freshness = "unavailable" if payout is None else "live"
     return {"asset": asset, "payout": payout, **metadata, "freshness": freshness, "timestamp": utc_now()}

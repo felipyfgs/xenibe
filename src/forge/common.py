@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from xenibe.artifacts.store import ValidationIssue, experiment_dir, load_json
+from xenibe.metrics.summary import METRIC_BLOCKED_SIGNALS, METRIC_CLOSED_SESSIONS, METRIC_NET_PROFIT, METRIC_SESSION_WIN_RATE, METRIC_TOTAL_SESSIONS, METRIC_TOTAL_TRADES, METRIC_WIN_RATE
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,11 @@ def metrics_path(run_directory: Path) -> Path:
 
 
 def load_metrics(run_dir: Path) -> dict[str, Any]:
+    compact = run_dir / "run.json"
+    if compact.exists():
+        data = load_json(compact)
+        metrics = data.get("metrics", {})
+        return metrics if isinstance(metrics, dict) else {}
     path = metrics_path(run_dir)
     if not path.exists():
         return {}
@@ -132,10 +138,15 @@ def render_run_report(experiment: str, run_id: str, metrics: dict[str, Any], man
         f"# Run {run_id}",
         "",
         f"- Experiment: `{experiment}`",
-        f"- Total trades: {metrics.get('total-trades', 0)}",
-        f"- Win rate: {float(metrics.get('win-rate', 0.0)):.4f}",
-        f"- Net profit: {float(metrics.get('net-profit', 0.0)):.2f}",
+        f"- Total trades: {metrics.get(METRIC_TOTAL_TRADES, 0)}",
+        f"- Trade win rate: {float(metrics.get(METRIC_WIN_RATE, 0.0)):.4f}",
+        f"- Net profit: {float(metrics.get(METRIC_NET_PROFIT, 0.0)):.2f}",
     ]
+    if METRIC_SESSION_WIN_RATE in metrics:
+        lines.append(f"- Session win rate: {float(metrics.get(METRIC_SESSION_WIN_RATE, 0.0)):.4f}")
+        lines.append(f"- Sessions: {metrics.get(METRIC_CLOSED_SESSIONS, 0)} closed / {metrics.get(METRIC_TOTAL_SESSIONS, 0)} total")
+    if METRIC_BLOCKED_SIGNALS in metrics:
+        lines.append(f"- Blocked signals: {metrics.get(METRIC_BLOCKED_SIGNALS, 0)}")
     winning_candidate = metrics.get("winning-candidate", manifest.get("winnerCandidate"))
     best_candidate = metrics.get("best-candidate", manifest.get("bestCandidate"))
     search_state = manifest.get("searchState")
@@ -145,6 +156,17 @@ def render_run_report(experiment: str, run_id: str, metrics: dict[str, Any], man
         lines.append(f"- Best candidate: `{best_candidate}`")
     if search_state is not None:
         lines.append(f"- Search state: `{search_state}`")
+    execution = manifest.get("execution")
+    if isinstance(execution, dict) and execution.get("payout") is not None:
+        lines.append(f"- Payout: {execution.get('payout')} (`{execution.get('payoutSource', 'unknown')}`)")
+    semantics = execution.get("semantics") if isinstance(execution, dict) else None
+    if isinstance(semantics, dict) and semantics.get("executionModel") == "ebinex-candle-expiry":
+        cutoff = semantics.get("submission", {}).get("cutoff", {})
+        seconds = cutoff.get("secondsBeforeClose")
+        lines.append(f"- Execution model: `{semantics['executionModel']}`")
+        lines.append(f"- Submission: current `{semantics.get('timeframe')}` candle before provider cutoff ({seconds}s before close)")
+        lines.append("- Contract: next timeframe candle from open to close")
+        lines.append("- Settlement: contract candle close")
     horizon = metrics.get("horizonValidation")
     if isinstance(horizon, dict):
         lines.append(f"- Horizon validation: `{horizon.get('status', 'unknown')}`")

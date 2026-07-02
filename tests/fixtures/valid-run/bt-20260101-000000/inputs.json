@@ -1,10 +1,30 @@
 {
+  "subject": "candidate-search",
   "resolvedLimits": {
     "batch-size": 1,
     "max-candidates": 1,
     "max-rounds": 1,
     "max-seconds": 60,
     "stagnation-rounds": 1
+  },
+  "execution": {
+    "dataSource": "configured-history",
+    "maxSeconds": 60,
+    "maxSecondsEnforced": true,
+    "payout": 0.8,
+    "payoutSource": "fixed-default"
+  },
+  "history": {
+    "candleCount": 4,
+    "dataSource": "configured-history",
+    "files": [
+      {
+        "path": "data/EURUSD_M1.csv",
+        "sha256": "fixture-history-sha256",
+        "size": 256
+      }
+    ],
+    "source": "data"
   },
   "runId": "bt-20260101-000000"
 }

@@ -52,9 +52,16 @@ class BacktestTests(unittest.TestCase):
     def test_order_enters_and_settles_on_next_candle(self) -> None:
         result = run_m1_backtest(candles_for_tests(), strategy=lambda _closed, _index: Signal("call"))
 
+        self.assertEqual(result["signals"][0]["visibleThroughIndex"], 0)
+        self.assertEqual(result["orders"][0]["submissionIndex"], 1)
         self.assertEqual(result["orders"][0]["decisionIndex"], 1)
+        self.assertEqual(result["orders"][0]["contractIndex"], 2)
         self.assertEqual(result["orders"][0]["entryIndex"], 2)
+        self.assertEqual(result["orders"][0]["entryPolicy"], "next-candle-open")
+        self.assertEqual(result["orders"][0]["settlementPolicy"], "contract-candle-close")
+        self.assertEqual(result["trades"][0]["contractIndex"], 2)
         self.assertEqual(result["trades"][0]["settleIndex"], 2)
+        self.assertEqual(result["trades"][0]["settlementPolicy"], "contract-candle-close")
         self.assertEqual(result["trades"][0]["result"], "WIN")
 
     def test_cutoff_rejects_entry(self) -> None:
@@ -62,6 +69,10 @@ class BacktestTests(unittest.TestCase):
 
         self.assertEqual(result["orders"], [])
         self.assertEqual(result["blocks"][0]["code"], "cutoff-closed")
+        self.assertEqual(result["metrics"]["blocked-signals"], 2)
+        self.assertEqual(result["metrics"]["block-reason-counts"], {"cutoff-closed": 2})
+        self.assertEqual(result["metrics"]["total-trades"], 0)
+        self.assertEqual(result["metrics"]["total-sessions"], 0)
 
     def test_tie_defaults_to_refund(self) -> None:
         candles = [
@@ -149,6 +160,7 @@ class BacktestTests(unittest.TestCase):
 
         self.assertTrue(state["sessionClosed"])
         self.assertEqual(state["sessionCloseReason"], "stop-loss-reached")
+        self.assertEqual(state["sessionOutcome"], "lost")
         self.assertFalse(manager.state.session_active)
         self.assertEqual(manager.state.session_net_profit, 0)
         self.assertFalse(manager.state.soros_pending)
@@ -169,6 +181,8 @@ class BacktestTests(unittest.TestCase):
 
         self.assertTrue(state["sessionClosed"])
         self.assertEqual(state["sessionCloseReason"], "stop-win-reached")
+        self.assertEqual(state["sessionOutcome"], "won")
+        self.assertFalse(state["sorosPending"])
         self.assertFalse(manager.state.session_active)
         self.assertEqual(manager.state.session_net_profit, 0)
         self.assertAlmostEqual(manager.next_stake(), 5.56)
@@ -184,7 +198,102 @@ class BacktestTests(unittest.TestCase):
 
         self.assertFalse(decision.approved)
         self.assertEqual(decision.code, "stop-loss-risk-exceeded")
+        self.assertTrue(manager.state.session_active)
+        self.assertFalse(decision.details["sessionClosed"])
+        self.assertIsNone(decision.details["sessionOutcome"])
+
+    def test_blocked_first_signal_does_not_start_session(self) -> None:
+        manager = RiskManager(session_risk_config(stake={"max": 1}))
+
+        decision = manager.preflight(payout=0.8)
+
+        self.assertFalse(decision.approved)
+        self.assertEqual(decision.code, "stake-out-of-bounds")
+        self.assertEqual(manager.state.session_id, 0)
         self.assertFalse(manager.state.session_active)
+
+    def test_soros_and_martingale_state_clear_when_stop_boundaries_close_session(self) -> None:
+        stop_win_manager = RiskManager(session_risk_config(**{"stop-win": 4}))
+        win = stop_win_manager.preflight(payout=0.8)
+        win_state = stop_win_manager.settle("WIN", win.stake, 4)
+
+        self.assertTrue(win_state["sessionClosed"])
+        self.assertEqual(win_state["sessionOutcome"], "won")
+        self.assertFalse(win_state["sorosPending"])
+        self.assertEqual(win_state["sorosLevel"], 0)
+        self.assertEqual(win_state["sorosProfit"], 0.0)
+        self.assertEqual(win_state["martingaleStep"], 0)
+        self.assertFalse(stop_win_manager.state.soros_pending)
+
+        stop_loss_manager = RiskManager(session_risk_config(soros={"enabled": False}, martingale={"enabled": True, "max-steps": 3}))
+        for _ in range(3):
+            loss = stop_loss_manager.preflight(payout=0.8)
+            loss_state = stop_loss_manager.settle("LOSS", loss.stake, -loss.stake)
+
+        self.assertTrue(loss_state["sessionClosed"])
+        self.assertEqual(loss_state["sessionOutcome"], "lost")
+        self.assertEqual(loss_state["martingaleStep"], 0)
+
+        soros_loss_manager = RiskManager(session_risk_config())
+        base_win = soros_loss_manager.preflight(payout=0.8)
+        soros_loss_manager.settle("WIN", base_win.stake, 4)
+        soros_loss = soros_loss_manager.preflight(payout=0.8)
+        self.assertTrue(soros_loss.details["sorosActive"])
+        soros_loss_manager.settle("LOSS", soros_loss.stake, -soros_loss.stake)
+        for _ in range(2):
+            loss = soros_loss_manager.preflight(payout=0.8)
+            final_loss_state = soros_loss_manager.settle("LOSS", loss.stake, -loss.stake)
+
+        self.assertTrue(final_loss_state["sessionClosed"])
+        self.assertEqual(final_loss_state["sessionOutcome"], "lost")
+        next_session = soros_loss_manager.preflight(payout=0.8)
+        self.assertTrue(next_session.approved)
+        self.assertEqual(soros_loss_manager.state.session_id, 2)
+        self.assertFalse(next_session.details["sorosActive"])
+
+    def test_backtest_session_soros_and_block_metrics_are_reported_separately(self) -> None:
+        candles = [
+            Candle("2026-01-01T00:00:00Z", 1.0, 1.1, 0.9, 1.0),
+            Candle("2026-01-01T00:01:00Z", 1.0, 1.1, 0.9, 1.0),
+            Candle("2026-01-01T00:02:00Z", 1.0, 1.2, 0.9, 1.1),
+            Candle("2026-01-01T00:03:00Z", 1.0, 1.2, 0.9, 1.1),
+            Candle("2026-01-01T00:04:00Z", 1.1, 1.2, 0.9, 1.0),
+            Candle("2026-01-01T00:05:00Z", 1.1, 1.2, 0.9, 1.0),
+            Candle("2026-01-01T00:06:00Z", 1.1, 1.2, 0.9, 1.0),
+        ]
+
+        result = run_m1_backtest(candles, strategy=lambda _closed, _index: Signal("call"), risk_config=session_risk_config(**{"stop-win": 10}))
+        metrics = result["metrics"]
+
+        self.assertEqual(metrics["total-trades"], 5)
+        self.assertEqual(metrics["wins"], 2)
+        self.assertEqual(metrics["losses"], 3)
+        self.assertAlmostEqual(metrics["win-rate"], 0.4)
+        self.assertEqual(metrics["total-sessions"], 2)
+        self.assertEqual(metrics["closed-sessions"], 2)
+        self.assertEqual(metrics["won-sessions"], 1)
+        self.assertEqual(metrics["lost-sessions"], 1)
+        self.assertEqual(metrics["open-sessions"], 0)
+        self.assertAlmostEqual(metrics["session-win-rate"], 0.5)
+        self.assertAlmostEqual(metrics["average-trades-per-closed-session"], 2.5)
+        self.assertEqual(metrics["blocked-signals"], 0)
+        self.assertEqual(metrics["block-reason-counts"], {})
+        self.assertEqual(metrics["soros-trades"], 1)
+        self.assertEqual(metrics["soros-wins"], 1)
+        self.assertEqual(metrics["soros-losses"], 0)
+        self.assertAlmostEqual(metrics["soros-net-profit"], 7.2)
+        self.assertTrue(result["orders"][1]["sorosActive"])
+        self.assertTrue(result["trades"][1]["sorosActive"])
+
+    def test_open_session_is_reported_without_outcome(self) -> None:
+        result = run_m1_backtest(candles_for_tests()[:3], strategy=lambda _closed, _index: Signal("call"), risk_config=session_risk_config())
+
+        self.assertEqual(result["metrics"]["total-sessions"], 1)
+        self.assertEqual(result["metrics"]["closed-sessions"], 0)
+        self.assertEqual(result["metrics"]["won-sessions"], 0)
+        self.assertEqual(result["metrics"]["lost-sessions"], 0)
+        self.assertEqual(result["metrics"]["open-sessions"], 1)
+        self.assertEqual(result["metrics"]["session-win-rate"], 0.0)
 
     def test_backtest_continues_after_session_close_and_waits_for_next_signal(self) -> None:
         candles = [

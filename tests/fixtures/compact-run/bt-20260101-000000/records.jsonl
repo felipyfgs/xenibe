@@ -1,0 +1,3 @@
+{"data":{"candidateFingerprint":"fixture-candidate-fingerprint","candidateId":"candidate-000001","classification":"winner","components":[],"evaluationFingerprint":"fixture-evaluation-fingerprint","metrics":{"net-profit":8.0,"win-rate":1.0},"parameters":{},"reason":"target-hit","riskState":{},"status":"tested"},"kind":"candidate","seq":1}
+{"data":{"bestCandidate":"candidate-000001","candidateIds":["candidate-000001"],"round":1,"stagnantRounds":0,"status":"completed","winnerCandidate":"candidate-000001"},"kind":"round","seq":2}
+{"data":{"decision":"target-hit","round":1,"scoreboard":"run.json#scoreboard","summary":"target metric satisfied"},"kind":"reflection","seq":3}

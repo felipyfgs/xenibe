@@ -6,6 +6,8 @@ from xenibe.artifacts.store import (
     list_experiments,
     load_experiment,
     validate_experiment_dir,
+    validate_promoted_catalog,
+    validate_promoted_robot_dir,
     validate_run_dir,
 )
 
@@ -17,5 +19,7 @@ __all__ = [
     "list_experiments",
     "load_experiment",
     "validate_experiment_dir",
+    "validate_promoted_catalog",
+    "validate_promoted_robot_dir",
     "validate_run_dir",
 ]

@@ -2,7 +2,7 @@
 
 ## Run
 
-Avaliacao historica imutavel de uma configuracao de experimento sobre candles historicos. No dominio atual, um run real e um backtest e usa `runId` com prefixo `bt-`.
+Avaliacao historica imutavel de uma configuracao de experimento sobre candles historicos. Runs de backtest usam `runId` com prefixo `bt-`; runs em modo `simulate` usam prefixo `sim-`.
 
 ## Subject
 
@@ -14,7 +14,7 @@ Execucao historica reprodutivel de candidatos de estrategia sobre candles ja con
 
 ## Validacao de Robo Promovido
 
-Backtest historico imutavel que avalia um unico `robot.yml` promovido, sem gerar candidatos a partir de `search-scope.yml`. O resultado e gravado como um novo run `bt-*` no experimento e deve declarar `subject=promoted-robot`. A CLI canonica e `forge run validate-promoted <experiment> <source-run-id>`.
+Backtest historico imutavel que avalia um unico `robot.yml` promovido, sem gerar candidatos a partir de `search-scope.yml`. O resultado e gravado como um novo run `bt-*` no experimento e deve declarar `subject=promoted-robot`. A validacao promovida ainda nao esta exposta como comando publico compacto.
 
 ## Status
 
@@ -34,7 +34,7 @@ Motivo de encerramento de um run de busca de candidatos. Nao se aplica a validac
 
 ## Simulate
 
-Modo futuro, ainda sem contrato canonico. Nao deve ser usado como sinonimo de backtest. Para existir, precisa definir diferencas observaveis em relacao a um backtest historico.
+Modo solicitado por `forge backtest <experiment> --mode simulate`. Usa o mesmo fluxo historico atual, registra `mode=simulate` e exige `runId` com prefixo `sim-`.
 
 ## Experiment
 
@@ -46,7 +46,7 @@ Combinacao concreta de componentes de estrategia gerada a partir do `search-scop
 
 ## Robo Promovido
 
-Snapshot imutavel e executavel de um candidato vencedor. Deve conter origem, fingerprints, componentes, parametros, configuracao de risco efetiva, contrato de execucao, target de promocao, politica de horizonte quando aplicavel e metricas de promocao suficientes para permitir validacoes futuras sem gerar novos candidatos a partir de `search-scope.yml`. O local canonico inicial e `promoted/<experiment>/<run-id>/robot.yml`.
+Snapshot imutavel e executavel de um candidato vencedor. Deve conter origem, fingerprints, componentes, parametros, configuracao de risco efetiva, contrato de execucao, target de promocao, politica de horizonte quando aplicavel, score e metricas de promocao suficientes para permitir validacoes futuras sem gerar novos candidatos a partir de `search-scope.yml`. O local canonico e `promoted/<robot-id>/robot.yml`, com `robot-id` inicial em `<experiment>--<run-id>`.
 
 ## Robot.yml
 

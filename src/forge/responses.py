@@ -75,7 +75,7 @@ def fail(
     fix: str | None = None,
     action_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    actions = next_actions or ["run forge validate --json"]
+    actions = next_actions or ["forge check --json"]
     if target is None or fix is None:
         default_target, default_fix = _default_repair_context(code, message, actions, data)
         target = target or default_target

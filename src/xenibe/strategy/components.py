@@ -4,6 +4,7 @@ from typing import Any
 
 
 VALID_TIMEFRAMES = ("M1", "M5", "M15", "M30", "H1")
+SCENARIO_DERIVED_SIDE_TRIGGERS = ("engulfing", "momentum-close", "pinbar-rejection")
 
 CANONICAL_SEARCH_FLOW = (
     "context",
@@ -90,15 +91,12 @@ COMPONENT_PARAMETER_RULES = {
     "trigger": {
         "engulfing": {
             "close-required": {"type": "bool"},
-            "side": {"allowed": ("call", "put")},
         },
         "pinbar-rejection": {
             "min-wick-ratio": {"type": "nonnegative-number"},
-            "side": {"allowed": ("call", "put")},
         },
         "momentum-close": {
             "body-min-atr": {"type": "nonnegative-number"},
-            "side": {"allowed": ("call", "put")},
         },
     },
     "confirmation": {
@@ -116,7 +114,7 @@ COMPONENT_PARAMETER_RULES = {
         "weighted-score": {
             "min-score": {"type": "nonnegative-number"},
             "entry": {"allowed": ("next-candle-open",)},
-            "expiration-candles": {"type": "positive-int"},
+            "expiration-candles": {"type": "positive-int", "required": False},
         },
     },
 }

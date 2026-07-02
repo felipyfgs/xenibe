@@ -1,7 +1,6 @@
 from xenibe.strategy.compiler import UnsupportedComponentError, compile_candidate_strategy, evaluate_candidate_decision
 from xenibe.strategy.search import (
     build_scoreboard,
-    candidate_allows_target_hit,
     candidate_fingerprint,
     candidate_rank_key,
     classify_candidate,
@@ -15,7 +14,6 @@ from xenibe.strategy.search import (
 __all__ = [
     "UnsupportedComponentError",
     "build_scoreboard",
-    "candidate_allows_target_hit",
     "candidate_fingerprint",
     "candidate_rank_key",
     "classify_candidate",

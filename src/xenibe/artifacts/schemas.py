@@ -11,6 +11,7 @@ from xenibe.strategy.components import (
     LOOP_LIMIT_KEYS,
     REQUIRED_SEARCH_STAGES,
     ROLE_ALIASES,
+    SCENARIO_DERIVED_SIDE_TRIGGERS,
     VALID_TIMEFRAMES,
     canonical_role,
 )
@@ -27,7 +28,25 @@ CANONICAL_CONTEXT_PATHS = {
     "experiment": "experiment",
 }
 
-RUN_ARTIFACTS = (
+COMPACT_RUN_ARTIFACTS = (
+    "run.json",
+    "records.jsonl",
+    "report.md",
+)
+
+COMPACT_RECORD_KINDS = (
+    "candidate",
+    "round",
+    "reflection",
+    "signal",
+    "order",
+    "trade",
+    "block",
+    "equity",
+    "horizon",
+)
+
+LEGACY_RUN_ARTIFACTS = (
     "manifest.json",
     "config-snapshot.yml",
     "inputs.json",
@@ -39,6 +58,8 @@ RUN_ARTIFACTS = (
     "report.md",
 )
 
+RUN_ARTIFACTS = LEGACY_RUN_ARTIFACTS
+
 EXPERIMENT_REQUIRED_KEYS = {
     "experiment.yml": ("name", "hypothesis", "target", "stop-on-target"),
     "ingest.yml": ("data", "validation"),
@@ -46,11 +67,33 @@ EXPERIMENT_REQUIRED_KEYS = {
 }
 
 RUN_JSON_REQUIRED_KEYS = {
-    "manifest.json": ("runId", "experiment", "mode", "status", "createdAt"),
-    "inputs.json": ("runId", "resolvedLimits"),
+    "manifest.json": ("runId", "experiment", "mode", "subject", "status", "createdAt"),
+    "inputs.json": ("runId", "subject", "resolvedLimits"),
     "scoreboard.json": ("runId", "rankings", "components"),
     "metrics.json": ("runId", "status", "metrics"),
 }
+
+COMPACT_RUN_JSON_REQUIRED_KEYS = (
+    "runId",
+    "experiment",
+    "mode",
+    "subject",
+    "status",
+    "createdAt",
+    "completedAt",
+    "configSnapshot",
+    "inputs",
+    "metrics",
+    "scoreboard",
+    "recordCounts",
+)
+
+RUN_FORMAT_MARKER_KEYS = (
+    "schemaVersion",
+    "schema-version",
+    "formatVersion",
+    "format-version",
+)
 
 RUN_JSONL_FILES = (
     "candidates.jsonl",
@@ -58,9 +101,12 @@ RUN_JSONL_FILES = (
     "reflections.jsonl",
 )
 
-RUN_MODES = ("backtest",)
+RUN_MODES = ("backtest", "simulate")
+RUN_SUBJECT_VALUES = ("candidate-search", "promoted-robot")
 RUN_STATUS_VALUES = ("running", "completed", "failed")
-RUN_ID_MODE_PREFIXES = {"backtest": "bt"}
+RUN_ID_MODE_PREFIXES = {"backtest": "bt", "simulate": "sim"}
+
+PROMOTED_ROBOT_REQUIRED_SECTIONS = ("robot", "source", "strategy", "risk", "execution", "promotion")
 
 DETAIL_JSONL_FILES = (
     "signals.jsonl",
@@ -102,6 +148,7 @@ VALID_STATUS_CODES = {
     "cutoff-closed",
     "provider-connection-failed",
     "provider-unavailable",
+    "provider-credentials-missing",
     "provider-error",
     "provider-order-rejected",
     "provider-asset-closed",
@@ -127,6 +174,19 @@ VALID_TARGET_METRICS = (
     "max-loss-streak",
     "average-trade-return",
     "average-payoff",
+    "total-sessions",
+    "closed-sessions",
+    "won-sessions",
+    "lost-sessions",
+    "open-sessions",
+    "session-win-rate",
+    "average-trades-per-closed-session",
+    "average-net-profit-per-closed-session",
+    "blocked-signals",
+    "soros-trades",
+    "soros-wins",
+    "soros-losses",
+    "soros-net-profit",
 )
 VALID_TARGET_OPERATORS = (">=", ">", "<=", "<", "=", "==")
 
@@ -171,9 +231,9 @@ DEFAULT_SEARCH_SCOPE = {
         "volatility": [],
         "structure": [],
         "setup": [],
-        "trigger": [{"type": "momentum-close", "parameters": {"body-min-atr": [0.1], "side": ["call", "put"]}}],
+        "trigger": [{"type": "momentum-close", "parameters": {"body-min-atr": [0.1]}}],
         "confirmation": [],
-        "decision": [{"type": "weighted-score", "parameters": {"min-score": [1.0], "entry": ["next-candle-open"], "expiration-candles": [1]}}],
+        "decision": [{"type": "weighted-score", "parameters": {"min-score": [1.0], "entry": ["next-candle-open"]}}],
     },
 }
 

@@ -3,8 +3,21 @@
   "bestCandidate": "candidate-000001",
   "experiment": "valid-experiment",
   "mode": "backtest",
+  "subject": "candidate-search",
   "runId": "bt-20260101-000000",
   "searchState": "target-hit",
+  "search": {
+    "elapsedSeconds": 0.01,
+    "evaluatedCandidateCount": 1,
+    "timedOut": false
+  },
+  "execution": {
+    "dataSource": "configured-history",
+    "maxSeconds": 60,
+    "maxSecondsEnforced": true,
+    "payout": 0.8,
+    "payoutSource": "fixed-default"
+  },
   "skippedDuplicates": 0,
   "winnerCandidate": "candidate-000001",
   "status": "completed"

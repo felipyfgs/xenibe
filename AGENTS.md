@@ -30,6 +30,10 @@ History uses concise messages such as `feat: add status command and service for 
 
 Do not commit secrets, API keys, `_stude/`, `openspec/`, `.opencode/`, `.env`, or virtual environments. Treat generated artifacts and untracked files as user-owned unless explicitly requested otherwise. Before committing or pushing, inspect `git status --short`, staged diffs, and relevant config files for sensitive data.
 
+## OpenSpec & Spec Language
+
+Write all new or updated OpenSpec artifacts in Brazilian Portuguese (pt-BR), including `proposal.md`, `design.md`, `tasks.md`, delta specs, and main specs. Keep OpenSpec-required structural tokens in English when needed for validation, such as `## ADDED Requirements`, `## MODIFIED Requirements`, `### Requirement:`, `#### Scenario:`, `WHEN`, `THEN`, `AND`, and `SHALL`. Preserve code identifiers, CLI commands, schema keys, artifact names, provider names, and error codes exactly as implemented. When touching existing English specs, translate the edited sections to pt-BR when practical, but do not mass-translate unrelated historical artifacts unless explicitly requested.
+
 ## Agent-Specific Instructions
 
 Always communicate with the user in Brazilian Portuguese (pt-BR), unless the user explicitly requests another language.

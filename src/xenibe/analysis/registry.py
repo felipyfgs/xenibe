@@ -219,51 +219,49 @@ def evaluate_sr_reversal(ctx: AnalysisContext, params: dict[str, Any], role: str
 
 
 def evaluate_engulfing(ctx: AnalysisContext, params: dict[str, Any], role: str, component_type: str) -> Evaluation:
-    side = str(params.get("side", "")).lower() or None
     if ctx.previous is None or ctx.last is None:
         return unavailable(role, component_type, "engulfing-warmup")
     previous = ctx.previous
     last = ctx.last
     bullish = previous.close < previous.open and last.close > last.open and last.open <= previous.close and last.close >= previous.open
     bearish = previous.close > previous.open and last.close < last.open and last.open >= previous.close and last.close <= previous.open
-    if side == "call" and bullish:
+    if bullish:
         return passed(role, component_type, "bullish-engulfing", side="call")
-    if side == "put" and bearish:
+    if bearish:
         return passed(role, component_type, "bearish-engulfing", side="put")
-    return failed(role, component_type, "engulfing-not-found", side=side)
+    return failed(role, component_type, "engulfing-not-found")
 
 
 def evaluate_pinbar(ctx: AnalysisContext, params: dict[str, Any], role: str, component_type: str) -> Evaluation:
     last = _require_last(ctx, role, component_type)
     if isinstance(last, Evaluation):
         return last
-    side = str(params.get("side", "")).lower() or None
     minimum = _float(params, "min-wick-ratio", 0.55)
     total = _total_range(last)
     if total == 0:
         return failed(role, component_type, "zero-range-candle")
     lower_ratio = _lower_wick(last) / total
     upper_ratio = _upper_wick(last) / total
-    if side == "call" and lower_ratio >= minimum:
+    if lower_ratio >= minimum and lower_ratio > upper_ratio:
         return passed(role, component_type, "bullish-pinbar", side="call", wickRatio=lower_ratio)
-    if side == "put" and upper_ratio >= minimum:
+    if upper_ratio >= minimum and upper_ratio > lower_ratio:
         return passed(role, component_type, "bearish-pinbar", side="put", wickRatio=upper_ratio)
-    return failed(role, component_type, "pinbar-not-found", side=side, lowerWickRatio=lower_ratio, upperWickRatio=upper_ratio)
+    return failed(role, component_type, "pinbar-not-found", lowerWickRatio=lower_ratio, upperWickRatio=upper_ratio)
 
 
 def evaluate_momentum_close(ctx: AnalysisContext, params: dict[str, Any], role: str, component_type: str) -> Evaluation:
     last = _require_last(ctx, role, component_type)
     if isinstance(last, Evaluation):
         return last
-    side = str(params.get("side", "")).lower() or None
     minimum = _float(params, "body-min-atr", 0.35)
     atr_value = ctx.atr(14)
     if not atr_value.available or not atr_value.value:
         return unavailable(role, component_type, "momentum-atr-warmup", atr=atr_value.reason)
     body_ratio = _body(last) / float(atr_value.value)
-    if body_ratio >= minimum and _direction(last) == side:
-        return passed(role, component_type, "momentum-close", side=side, bodyRatio=body_ratio)
-    return failed(role, component_type, "momentum-not-confirmed", side=side, bodyRatio=body_ratio)
+    direction = _direction(last)
+    if body_ratio >= minimum and direction in {"call", "put"}:
+        return passed(role, component_type, "momentum-close", side=direction, bodyRatio=body_ratio)
+    return failed(role, component_type, "momentum-not-confirmed", direction=direction, bodyRatio=body_ratio)
 
 
 def evaluate_mtf_alignment(ctx: AnalysisContext, params: dict[str, Any], role: str, component_type: str) -> Evaluation:

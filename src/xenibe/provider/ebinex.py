@@ -41,7 +41,7 @@ class EbinexProvider:
         if self.client is not None:
             return self.client
         if not self.email or not self.password:
-            raise ProviderError("provider-connection-failed", "Ebinex credentials are not configured")
+            raise ProviderError("provider-credentials-missing", "Ebinex credentials are not configured")
         try:
             module = importlib.import_module("ebinex")
         except Exception as exc:

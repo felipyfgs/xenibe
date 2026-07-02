@@ -5,20 +5,19 @@ Data: 2026-06-30
 
 ## Contexto
 
-O codigo expunha `forge run backtest` e `forge run simulate`, mas ambos chamavam o mesmo fluxo de backtest, usavam o mesmo motor M1 e diferiam basicamente por `mode` e prefixo de `runId` (`bt-` ou `sim-`). Isso fazia `simulate` parecer uma capacidade de dominio ja definida, sem comportamento proprio.
+O codigo expunha comandos de run em um namespace publico interno. A superficie compacta atual concentra a execucao em `forge backtest <experiment>` e permite solicitar simulacao com `--mode simulate`, preservando um unico caminho operacional de pesquisa historica.
 
 ## Decisao
 
-No estado atual do Xenibe, `run` significa uma avaliacao historica imutavel de uma configuracao de experimento sobre candles historicos. O modo concreto implementado e `backtest`.
+No estado atual do Xenibe, `run` significa uma avaliacao historica imutavel de uma configuracao de experimento sobre candles historicos. Os modos publicos aceitos sao `backtest` e `simulate`.
 
 `mode` descreve o mecanismo de execucao historica. O campo `subject` deve descrever o que foi avaliado, por exemplo `candidate-search` ou `promoted-robot`.
 
-`simulate` nao deve ser tratado como modo real enquanto nao tiver contrato observavel proprio. Um futuro modo de simulacao precisa definir antes suas diferencas de dominio, entradas, garantias e artefatos.
+`simulate` e solicitado como modo de `forge backtest` e deve ser distinguido por `mode=simulate` e prefixo `sim-`. Enquanto nao houver motor proprio, ele reaproveita o fluxo historico existente.
 
 ## Consequencias
 
-- `bt-*` e o unico identificador canonico de runs reais no dominio atual.
+- `bt-*` identifica runs `backtest`; `sim-*` identifica runs `simulate`.
 - `mode=backtest` pode cobrir mais de um `subject`, desde que todos sejam avaliacoes historicas imutaveis.
-- `sim-*` nao deve validar como run canonico sem uma nova decisao de dominio.
-- A CLI, os schemas e a documentacao devem evitar sugerir que `simulate` existe como comportamento equivalente a backtest.
-- Uma futura simulacao operacional precisa de nova decisao antes de ser implementada.
+- A CLI deve rejeitar `runId` cujo prefixo nao corresponda ao modo solicitado.
+- Uma futura simulacao operacional com motor proprio precisa de nova decisao antes de substituir o fluxo historico compartilhado.

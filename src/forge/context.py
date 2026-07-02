@@ -1,24 +1,9 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-
-class OfflineProvider:
-    name = "ebinex"
-    mode = "offline-contract"
-
-    def assets(self) -> list[dict[str, Any]]:
-        return []
-
-    def payout(self, _asset: str) -> None:
-        return None
-
-    def historical_candles(self, _asset: str, _timeframe: str, _start: str, _end: str) -> list[dict[str, Any]]:
-        return []
 
 
 ProviderFactory = Callable[[], Any]
@@ -35,9 +20,7 @@ class CommandContext:
 
     def provider(self) -> Any:
         if self.provider_factory is None:
-            if os.environ.get("EBINEX_EMAIL") and (os.environ.get("EBINEX_PASSWORD") or os.environ.get("EBINEX_PASS")):
-                from xenibe.provider import EbinexProvider
+            from xenibe.provider import EbinexProvider
 
-                return EbinexProvider()
-            return OfflineProvider()
+            return EbinexProvider()
         return self.provider_factory()

@@ -28,6 +28,7 @@ class RiskState:
     current_order_soros: bool = False
     session_closed: bool = False
     session_close_reason: str | None = None
+    session_outcome: str | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class RiskManager:
             "martingaleStep": self.state.martingale_step,
             "sessionClosed": self.state.session_closed if session_closed is None else session_closed,
             "sessionCloseReason": self.state.session_close_reason if session_close_reason is None else session_close_reason,
+            "sessionOutcome": self.state.session_outcome,
         }
 
     def _positive_number(self, key: str, default: float | None = None) -> float:
@@ -122,8 +124,24 @@ class RiskManager:
         self.state.martingale_step = 0
         self.state.session_closed = False
         self.state.session_close_reason = None
+        self.state.session_outcome = None
+
+    def _clear_progression_state(self) -> None:
+        self.state.soros_level = 0
+        self.state.soros_profit = 0.0
+        self.state.soros_pending = False
+        self.state.current_order_soros = False
+        self.state.martingale_step = 0
+
+    def _session_outcome(self, reason: str) -> str | None:
+        if reason.startswith("stop-win"):
+            return "won"
+        if reason.startswith("stop-loss"):
+            return "lost"
+        return None
 
     def _reset_session(self, reason: str) -> None:
+        outcome = self._session_outcome(reason)
         self.state.session_active = False
         self.state.session_start_balance = 0.0
         self.state.session_net_profit = 0.0
@@ -131,15 +149,14 @@ class RiskManager:
         self.state.session_stop_win = 0.0
         self.state.session_base_stake = 0.0
         self.state.session_stake_divisor = DEFAULT_STAKE_DIVISOR
-        self.state.soros_level = 0
-        self.state.soros_profit = 0.0
-        self.state.soros_pending = False
-        self.state.current_order_soros = False
-        self.state.martingale_step = 0
+        self._clear_progression_state()
         self.state.session_closed = True
         self.state.session_close_reason = reason
+        self.state.session_outcome = outcome
 
     def _close_session_decision(self, code: str, reason: str) -> RiskDecision:
+        self.state.session_outcome = self._session_outcome(code)
+        self._clear_progression_state()
         details = self.snapshot(session_active=False, session_closed=True, session_close_reason=code)
         self._reset_session(code)
         return RiskDecision(False, 0.0, code, reason, details)
@@ -167,15 +184,17 @@ class RiskManager:
         if available_seconds <= 5:
             return RiskDecision(False, 0.0, "cutoff-closed", "entry cutoff closed")
 
-        session_error = self._ensure_session()
-        if session_error is not None:
-            return session_error
-        if self.state.session_net_profit <= -self.state.session_stop_loss + EPSILON:
-            return self._close_session_decision("stop-loss-reached", "stop loss reached")
-        if self.state.session_net_profit >= self.state.session_stop_win - EPSILON:
-            return self._close_session_decision("stop-win-reached", "stop win reached")
-
-        stake = self.next_stake()
+        if self.state.session_active:
+            if self.state.session_net_profit <= -self.state.session_stop_loss + EPSILON:
+                return self._close_session_decision("stop-loss-reached", "stop loss reached")
+            if self.state.session_net_profit >= self.state.session_stop_win - EPSILON:
+                return self._close_session_decision("stop-win-reached", "stop win reached")
+            stake = self.next_stake()
+        else:
+            try:
+                stake = self._calculate_session_base_stake(self.state.balance)
+            except (TypeError, ValueError) as exc:
+                return RiskDecision(False, 0.0, "invalid-risk-config", str(exc))
         if requested_stake is not None and abs(requested_stake - stake) > EPSILON:
             return RiskDecision(False, 0.0, "stake-out-of-bounds", "requested stake does not match session stake")
         stake_config = self._stake_config()
@@ -186,8 +205,13 @@ class RiskManager:
         max_open_risk = float(self.config.get("max-open-risk", stake))
         if self.state.open_risk + stake > max_open_risk:
             return RiskDecision(False, 0.0, "open-risk-exceeded", "open risk exceeded")
-        if self.state.session_net_profit - stake < -self.state.session_stop_loss - EPSILON:
-            return self._close_session_decision("stop-loss-risk-exceeded", "next stake could exceed session stop loss")
+        if self.state.session_active and self.state.session_net_profit - stake < -self.state.session_stop_loss - EPSILON:
+            return RiskDecision(False, 0.0, "stop-loss-risk-exceeded", "next stake could exceed session stop loss", self.snapshot())
+
+        session_error = self._ensure_session()
+        if session_error is not None:
+            return session_error
+        stake = self.next_stake()
 
         expected_soros_stake = self.state.session_base_stake + self.state.soros_profit
         self.state.current_order_soros = (
@@ -247,6 +271,8 @@ class RiskManager:
         if close_reason is None:
             return self.snapshot(soros_active=was_soros)
 
+        self.state.session_outcome = self._session_outcome(close_reason)
+        self._clear_progression_state()
         snapshot = self.snapshot(session_active=False, session_closed=True, session_close_reason=close_reason, soros_active=was_soros)
         self._reset_session(close_reason)
         return snapshot

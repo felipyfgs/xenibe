@@ -25,8 +25,6 @@ components:
       parameters:
         body-min-atr:
           - 0.1
-        side:
-          - call
   confirmation: []
   decision:
     - type: weighted-score
@@ -35,5 +33,3 @@ components:
           - 1.0
         entry:
           - next-candle-open
-        expiration-candles:
-          - 1

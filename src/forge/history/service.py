@@ -116,7 +116,7 @@ def _manifest_conflict(message: str, path: Path) -> dict[str, Any]:
         "error": "canonical-history-conflict",
         "message": message,
         "path": str(path),
-        "next": ["re-run history download for the desired full range", "pass --replace only for disconnected replacement when the manifest is valid"],
+        "next": ["re-run forge data download for the desired full range", "pass --replace only for disconnected replacement when the manifest is valid"],
     }
 
 
@@ -203,7 +203,7 @@ def download(context: CommandContext, experiment: str, asset: str, timeframe: st
             "requestedRange": {"from": start, "to": end},
             "coverageRange": manifest.get("coverageRange") if manifest else None,
             "next": [
-                f"forge history download {asset} --experiment {experiment} --timeframe {timeframe} --from {start} --to {end} --replace --root {context.root} --json"
+                f"forge data download {asset} --experiment {experiment} --timeframe {timeframe} --from {start} --to {end} --replace --root {context.root} --json"
             ],
         }
     if action == "conflict":
@@ -228,6 +228,17 @@ def download(context: CommandContext, experiment: str, asset: str, timeframe: st
         return provider_error_payload(exc)
     metadata = provider_metadata(provider)
     normalized = _normalize_candle_records(candles, asset, timeframe, download_start, download_end)
+    if not normalized:
+        return {
+            "error": "provider-unavailable",
+            "message": "provider returned no canonical candles for the requested range; history was not written",
+            "path": str(path),
+            "manifestPath": str(manifest_path),
+            "requestedRange": {"from": start, "to": end},
+            "coverageRange": {"from": iso_datetime(download_range[0]), "to": iso_datetime(download_range[1])},
+            **metadata,
+            "next": ["verify Ebinex credentials, dependency, asset, timeframe, and requested range before retrying"],
+        }
     write_history_csv(path, normalized)
     manifest_data = _write_manifest(manifest_path, asset, timeframe, start, end, iso_datetime(download_range[0]), iso_datetime(download_range[1]), path, len(normalized), metadata)
     _update_ingest(base, asset, timeframe, start, end)

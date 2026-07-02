@@ -11,21 +11,19 @@ class ForgeCommand:
 
 
 COMMANDS: tuple[ForgeCommand, ...] = (
-    ForgeCommand("init", "forge init"),
-    ForgeCommand("validate", "forge validate"),
+    ForgeCommand("new", "forge new <experiment>"),
     ForgeCommand("status", "forge status"),
-    ForgeCommand("instructions", "forge instructions orchestrate <experiment>", ("orchestrate",)),
-    ForgeCommand("experiment", "forge experiment new|list|show|validate|archive|export", ("new", "list", "show", "validate", "archive", "export")),
-    ForgeCommand("run", "forge run backtest|list|show|validate|compare|promote|export", ("backtest", "list", "show", "validate", "compare", "promote", "export")),
-    ForgeCommand("report", "forge report show <experiment> <run-id>", ("show",)),
-    ForgeCommand("assets", "forge assets list", ("list",)),
-    ForgeCommand("payout", "forge payout get <asset>", ("get",)),
-    ForgeCommand("history", "forge history download <asset> --experiment <experiment> --timeframe <timeframe> --from <start> --to <end>", ("download",)),
+    ForgeCommand("show", "forge show [experiment] [run-id]"),
+    ForgeCommand("check", "forge check [experiment] [run-id]"),
+    ForgeCommand("data", "forge data list|download <asset> --experiment <experiment> --timeframe <timeframe> --from <start> --to <end>", ("list", "download")),
+    ForgeCommand("backtest", "forge backtest <experiment> [--mode backtest|simulate]"),
+    ForgeCommand("compare", "forge compare <experiment> <run-id-a> <run-id-b> [<run-id>...]"),
+    ForgeCommand("promote", "forge promote <experiment> <run-id> [--reason <reason>]"),
+    ForgeCommand("archive", "forge archive <experiment>"),
+    ForgeCommand("export", "forge export <experiment> [run-id]"),
 )
 
-COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
 COMMAND_NAMES = tuple(command.name for command in COMMANDS)
-DISPATCH_COMMAND_NAMES = tuple(name for name in COMMAND_NAMES if name != "init")
 SUBCOMMANDS = {
     command.name: set(command.subcommands)
     for command in COMMANDS
@@ -55,51 +53,61 @@ Commands:
 
 
 COMMAND_HELP: dict[str, str] = {
-    "experiment": """forge experiment - manage experiment artifacts
+    "new": """forge new - create an experiment and initialize the root when needed
 
 Usage:
-  forge experiment new <name>
-  forge experiment list
-  forge experiment show <name>
-  forge experiment validate <name>
-  forge experiment archive <name>
-  forge experiment export <name>
+  forge new <experiment>
 """,
-    "run": """forge run - execute and manage run artifacts
+    "status": """forge status - inspect the artifact root at a glance
 
 Usage:
-  forge run backtest <experiment> [--run-id <run-id>] [--allow-synthetic]
-  forge run list <experiment>
-  forge run show <experiment> <run-id>
-  forge run validate <experiment> <run-id>
-  forge run compare <experiment> <run-id-a> <run-id-b> [<run-id>...]
-  forge run promote <experiment> <run-id> [--reason <reason>]
-  forge run export <experiment> <run-id>
+  forge status
 """,
-    "report": """forge report - read run reports
+    "show": """forge show - inspect root, experiment, or run details
 
 Usage:
-  forge report show <experiment> <run-id>
+  forge show
+  forge show <experiment>
+  forge show <experiment> <run-id>
 """,
-    "assets": """forge assets - inspect provider assets
+    "check": """forge check - validate root, experiment, or run contracts
 
 Usage:
-  forge assets list
+  forge check
+  forge check <experiment>
+  forge check <experiment> <run-id>
 """,
-    "payout": """forge payout - inspect provider payout
+    "data": """forge data - list provider assets or download canonical history
 
 Usage:
-  forge payout get <asset>
+  forge data list
+  forge data download <asset> --experiment <experiment> --timeframe <timeframe> --from <start> --to <end> [--replace]
 """,
-    "history": """forge history - manage candle history
+    "backtest": """forge backtest - run a backtest or simulation search
 
 Usage:
-  forge history download <asset> --experiment <experiment> --timeframe <timeframe> --from <start> --to <end> [--replace]
+  forge backtest <experiment> [--mode backtest|simulate] [--run-id <run-id>]
 """,
-    "instructions": """forge instructions - inspect orchestration guidance
+    "compare": """forge compare - compare completed runs
 
 Usage:
-  forge instructions orchestrate <experiment>
+  forge compare <experiment> <run-id-a> <run-id-b> [<run-id>...]
+""",
+    "promote": """forge promote - promote a completed run
+
+Usage:
+  forge promote <experiment> <run-id> [--reason <reason>]
+""",
+    "archive": """forge archive - archive an experiment
+
+Usage:
+  forge archive <experiment>
+""",
+    "export": """forge export - export an experiment or completed run
+
+Usage:
+  forge export <experiment>
+  forge export <experiment> <run-id>
 """,
 }
 

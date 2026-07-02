@@ -7,19 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from forge import __version__
-from forge.assets import command as assets_command
-from forge.catalog import COMMAND_NAMES, DISPATCH_COMMAND_NAMES, render_help
+from forge.catalog import COMMAND_NAMES, render_help
 from forge.context import CommandContext, ProviderFactory
-from forge.experiment import command as experiment_command
-from forge.history import command as history_command
-from forge.instructions import command as instructions_command
-from forge.payout import command as payout_command
-from forge.report import command as report_command
 from forge.responses import attach_metadata, emit, fail, ok
-from forge.run import command as run_command
-from forge.status import command as status_command
-from forge.validate import command as validate_command
-from xenibe.artifacts.store import ImmutableRunError, init_artifact_root
+from forge.workflow import WORKFLOW_HANDLERS
+from xenibe.artifacts.store import ImmutableRunError
 
 
 @dataclass(frozen=True)
@@ -68,7 +60,7 @@ def parse_global(argv: list[str], provider_factory: ProviderFactory | None = Non
         elif item == "--root":
             if index + 1 >= len(argv):
                 context = CommandContext(root=root, as_json=as_json, dry_run=dry_run, yes=yes, no_color=no_color, provider_factory=provider_factory)
-                return ParsedGlobal(args, context, error=fail("missing-name", "--root requires a path", ["forge --root <path> init --json"]))
+                return ParsedGlobal(args, context, error=fail("missing-name", "--root requires a path", ["forge --root <path> new <experiment> --json"]))
             root = Path(argv[index + 1]).resolve()
             index += 2
         else:
@@ -78,43 +70,14 @@ def parse_global(argv: list[str], provider_factory: ProviderFactory | None = Non
     return ParsedGlobal(args=args, context=context, show_help=show_help, show_version=show_version)
 
 
-def _handle_init(context: CommandContext) -> dict[str, Any]:
-    if context.dry_run:
-        return ok(
-            {"artifactRoot": str(context.root), "created": [], "plannedActions": ["create artifact root", "create promoted, archived, and experiment directories", "write config.yml if missing"]},
-            [f"forge experiment new idx-m1-soros-reversal --root {context.root} --json"],
-            "dry-run",
-        )
-    created = init_artifact_root(context.root)
-    return ok(
-        {"artifactRoot": str(context.root), "created": [str(path) for path in created]},
-        [f"forge experiment new idx-m1-soros-reversal --root {context.root} --json"],
-        "created",
-    )
-
-
 def dispatch(args: list[str], context_or_root: CommandContext | Path | None = None) -> dict[str, Any]:
     context = context_or_root if isinstance(context_or_root, CommandContext) else CommandContext(root=(context_or_root or default_root()))
     if not args:
-        return fail("missing-command", "command required", ["forge init --json", "forge experiment list --json"])
+        return fail("missing-command", "command required", ["forge new <experiment> --json", "forge status --json"])
     command = args[0]
-    command_modules = {
-        "experiment": experiment_command.dispatch,
-        "run": run_command.dispatch,
-        "report": report_command.dispatch,
-        "assets": assets_command.dispatch,
-        "payout": payout_command.dispatch,
-        "history": history_command.dispatch,
-        "validate": validate_command.dispatch,
-        "status": status_command.dispatch,
-        "instructions": instructions_command.dispatch,
-    }
-    dispatchers = {name: command_modules[name] for name in DISPATCH_COMMAND_NAMES}
     try:
-        if command == "init":
-            return _handle_init(context)
-        if command in dispatchers:
-            return dispatchers[command](args[1:], context)
+        if command in WORKFLOW_HANDLERS:
+            return WORKFLOW_HANDLERS[command](args[1:], context)
     except ImmutableRunError as exc:
         return fail("immutable-run", str(exc), ["create a new run-id or write an audit artifact"])
     except FileExistsError as exc:

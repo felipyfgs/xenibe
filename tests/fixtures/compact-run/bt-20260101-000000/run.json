@@ -1,0 +1,122 @@
+{
+  "bestCandidate": "candidate-000001",
+  "completedAt": "2026-01-01T00:00:01+00:00",
+  "configSnapshot": {
+    "experiment": {
+      "hypothesis": "Fixture compact run.",
+      "name": "valid-experiment",
+      "stop-on-target": true,
+      "target": {
+        "metric": "win-rate",
+        "operator": ">=",
+        "value": 0.6
+      }
+    },
+    "ingest": {},
+    "provider": {},
+    "report": {},
+    "risk": {},
+    "search-scope": {}
+  },
+  "createdAt": "2026-01-01T00:00:00+00:00",
+  "execution": {
+    "dataSource": "configured-history",
+    "payout": 0.8,
+    "payoutSource": "fixed-default"
+  },
+  "experiment": "valid-experiment",
+  "inputs": {
+    "execution": {
+      "dataSource": "configured-history",
+      "payout": 0.8,
+      "payoutSource": "fixed-default"
+    },
+    "history": {
+      "candleCount": 4,
+      "dataSource": "configured-history",
+      "source": "data"
+    },
+    "resolvedLimits": {
+      "batch-size": 1,
+      "max-candidates": 1,
+      "max-rounds": 1,
+      "max-seconds": 60,
+      "stagnation-rounds": 1
+    },
+    "runId": "bt-20260101-000000",
+    "subject": "candidate-search"
+  },
+  "limitations": [
+    {
+      "code": "fixed-payout",
+      "message": "Backtests currently use fixed payout 0.8."
+    }
+  ],
+  "metrics": {
+    "best-candidate": "candidate-000001",
+    "net-profit": 8.0,
+    "skipped-duplicates": 0,
+    "total-trades": 1,
+    "win-rate": 1.0,
+    "winning-candidate": "candidate-000001"
+  },
+  "mode": "backtest",
+  "promotion": {
+    "candidate": {
+      "candidateFingerprint": "fixture-candidate-fingerprint",
+      "candidateId": "candidate-000001",
+      "classification": "winner",
+      "components": [],
+      "evaluationFingerprint": "fixture-evaluation-fingerprint",
+      "metrics": {
+        "net-profit": 8.0,
+        "win-rate": 1.0
+      },
+      "parameters": {},
+      "riskState": {},
+      "status": "tested"
+    },
+    "eligible": true
+  },
+  "recordCounts": {
+    "block": 0,
+    "candidate": 1,
+    "equity": 0,
+    "horizon": 0,
+    "order": 0,
+    "reflection": 1,
+    "round": 1,
+    "signal": 0,
+    "trade": 0
+  },
+  "runId": "bt-20260101-000000",
+  "scoreboard": {
+    "components": [],
+    "rankings": {
+      "candidates": [
+        {
+          "candidateId": "candidate-000001",
+          "classification": "winner",
+          "metrics": {
+            "net-profit": 8.0,
+            "win-rate": 1.0
+          },
+          "rank": 1,
+          "status": "tested"
+        }
+      ]
+    },
+    "runId": "bt-20260101-000000",
+    "targetMetric": "win-rate"
+  },
+  "search": {
+    "elapsedSeconds": 0.01,
+    "evaluatedCandidateCount": 1,
+    "timedOut": false
+  },
+  "searchState": "target-hit",
+  "skippedDuplicates": 0,
+  "status": "completed",
+  "subject": "candidate-search",
+  "winnerCandidate": "candidate-000001"
+}

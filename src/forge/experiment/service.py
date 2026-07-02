@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from xenibe.artifacts.naming import is_experiment_name
-from xenibe.artifacts.store import create_experiment, experiment_dir, list_experiments, load_experiment, validate_experiment_dir
+from xenibe.artifacts.store import create_experiment, experiment_dir, load_experiment, validate_experiment_dir
 
 from forge.common import issues_payload
 
@@ -20,10 +20,6 @@ def create(root: Path, name: str, dry_run: bool = False) -> dict[str, Any]:
     if dry_run:
         return {"experiment": name, "path": str(path), "plannedActions": ["create experiment directory", "write experiment.yml, ingest.yml, and search-scope.yml", "create data directory"]}
     return {"experiment": name, "path": str(create_experiment(root, name))}
-
-
-def list_all(root: Path) -> dict[str, list[str]]:
-    return {"experiments": list_experiments(root)}
 
 
 def show(root: Path, name: str) -> dict[str, Any]:

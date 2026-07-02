@@ -92,8 +92,8 @@ def validate_canonical_manifest(manifest: dict[str, Any], csv_path: Path, asset:
         errors.append(("path", f"must equal {expected_path}"))
     if manifest_range(manifest) is None:
         errors.append(("coverageRange", "must contain valid from/to coverage dates"))
-    if not isinstance(manifest.get("candleCount"), int) or int(manifest.get("candleCount", -1)) < 0:
-        errors.append(("candleCount", "must be a non-negative integer"))
+    if not isinstance(manifest.get("candleCount"), int) or int(manifest.get("candleCount", 0)) <= 0:
+        errors.append(("candleCount", "must be a positive integer"))
     else:
         try:
             actual_count = csv_candle_count(csv_path)
@@ -102,6 +102,8 @@ def validate_canonical_manifest(manifest: dict[str, Any], csv_path: Path, asset:
         else:
             if int(manifest["candleCount"]) != actual_count:
                 errors.append(("candleCount", "must match the canonical CSV row count"))
+    if str(manifest.get("providerMode", "")).lower() in {"offline", "offline-contract"}:
+        errors.append(("providerMode", "offline provider mode is not supported for canonical history"))
     if not isinstance(manifest.get("sha256"), str) or not manifest.get("sha256"):
         errors.append(("sha256", "must be a non-empty checksum"))
     else:

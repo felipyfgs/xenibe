@@ -15,25 +15,26 @@ Uma validacao de robo promovido deve gravar um novo run `bt-*` em:
 
 `experiment/<experiment>/runs/<bt-run-id>/`
 
-A interface CLI canonica deve ser:
+A interface CLI compacta ainda nao expoe validacao promovida. Quando for exposta, deve seguir a superficie de workflow atual em vez de reabrir o namespace `run`.
 
 ```bash
-forge run validate-promoted <experiment> <source-run-id> --root <root> --json
+forge backtest <experiment> --root <root> --json
 ```
 
-O subcomando e intencionalmente separado de `forge run backtest`, porque `backtest` executa busca de candidatos via `search-scope.yml`, enquanto `validate-promoted` avalia um unico robo ja escolhido.
+O fluxo `forge backtest` atual executa busca de candidatos via `search-scope.yml`; uma futura validacao promovida deve avaliar um unico robo ja escolhido sem gerar candidatos novos.
 
-`validate-promoted` deve usar o `ingest.yml` atual do experimento no momento da validacao. Se o usuario quiser validar em outro ativo, timeframe ou periodo, deve preparar o experimento antes, por exemplo com `forge history download ...`, e entao rodar a validacao.
+A validacao promovida deve usar o `ingest.yml` atual do experimento no momento da validacao. Se o usuario quiser validar em outro ativo, timeframe ou periodo, deve preparar o experimento antes, por exemplo com `forge data download ...`, e entao rodar a validacao.
 
 Esse run deve registrar que o assunto avaliado foi um robo promovido, nao uma busca de candidatos. Os artefatos devem apontar para a origem:
 
-`promoted/<experiment>/<source-run-id>/robot.yml`
+`promoted/<robot-id>/robot.yml`
 
 No minimo, `manifest.json` ou `inputs.json` devem expor:
 
 - `subject`: `promoted-robot`;
 - experimento de origem;
 - run de origem da promocao;
+- identificador do robo promovido;
 - caminho do `robot.yml` usado;
 - candidato/fingerprint do robo avaliado.
 
@@ -51,7 +52,7 @@ Se o `robot.yml` contiver uma politica de `horizon-validation` habilitada, `vali
 
 ## Consequencias
 
-- `run show`, `run validate`, `report show` e `run compare` continuam operando sobre o mesmo catalogo de runs.
+- `forge show`, `forge check` e `forge compare` continuam operando sobre o mesmo catalogo de runs.
 - O Forge evita criar uma arvore paralela de validacoes neste momento.
 - Validadores e relatorios existentes podem ser reaproveitados com adaptacoes minimas para deixar claro que nao houve busca.
 - O mesmo prefixo `bt-*` continua valido porque a validacao e historica e imutavel.

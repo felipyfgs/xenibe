@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
-from forge.common import issues_payload, load_metrics, select_metrics
-from xenibe.artifacts.schemas import DETAIL_JSONL_FILES, RUN_ARTIFACTS
-from xenibe.artifacts.store import ValidationIssue, experiment_dir, experiments_root, load_json, validate_config, validate_experiment_dir, validate_run_dir
+from forge.common import issues_payload, select_metrics
+from xenibe.artifacts.store import ValidationIssue, experiment_dir, experiments_root, load_json, load_run_view, validate_config, validate_experiment_dir, validate_promoted_catalog
+from xenibe.metrics.summary import METRIC_NET_PROFIT, METRIC_SESSION_WIN_RATE, METRIC_TOTAL_SESSIONS, METRIC_TOTAL_TRADES, METRIC_WIN_RATE
 
 
-SUMMARY_METRICS = ("win-rate", "net-profit", "total-trades", "winning-candidate", "best-candidate")
+SUMMARY_METRICS = (METRIC_WIN_RATE, METRIC_SESSION_WIN_RATE, METRIC_NET_PROFIT, METRIC_TOTAL_TRADES, METRIC_TOTAL_SESSIONS, "winning-candidate", "best-candidate")
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -45,8 +44,7 @@ def _latest_run_dirs(base: Path) -> list[Path]:
     return sorted((path for path in runs.iterdir() if path.is_dir()), key=lambda path: path.name, reverse=True)
 
 
-def _scoreboard_summary(path: Path) -> dict[str, Any]:
-    scoreboard = _load_json(path)
+def _scoreboard_summary(scoreboard: dict[str, Any]) -> dict[str, Any]:
     candidates = scoreboard.get("rankings", {}).get("candidates", [])
     if not isinstance(candidates, list):
         candidates = []
@@ -67,31 +65,31 @@ def _scoreboard_summary(path: Path) -> dict[str, Any]:
 
 
 def run_summary(run_directory: Path) -> dict[str, Any]:
-    manifest = _load_json(run_directory / "manifest.json")
-    try:
-        metrics = load_metrics(run_directory)
-    except Exception:
-        metrics = {}
     expected_experiment = run_directory.parent.parent.name if run_directory.parent.name == "runs" else None
-    issues = validate_run_dir(run_directory, expected_experiment=expected_experiment)
+    loaded = load_run_view(run_directory, expected_experiment=expected_experiment)
+    manifest = loaded["manifest"]
+    metrics = loaded["metrics"]
+    issues = loaded["issues"]
     summary: dict[str, Any] = {
-        "runId": str(manifest.get("runId") or run_directory.name),
+        "runId": str(loaded.get("runId") or run_directory.name),
         "path": str(run_directory),
-        "artifactPaths": _artifact_paths({_artifact_key(name): run_directory / name for name in (*RUN_ARTIFACTS, *DETAIL_JSONL_FILES)}),
+        "layout": loaded["layout"],
+        "artifactPaths": loaded["artifactPaths"],
+        "duplicateOnly": loaded["duplicateOnly"],
+        "promotionEligible": loaded["promotionEligible"],
     }
     if issues:
         summary["valid"] = False
         summary["issues"] = issues_payload(issues)
     else:
         summary["valid"] = True
-    for key in ("mode", "status", "createdAt", "completedAt", "searchState", "winnerCandidate", "bestCandidate"):
+    for key in ("mode", "subject", "status", "createdAt", "completedAt", "searchState", "search", "winnerCandidate", "bestCandidate"):
         if manifest.get(key) is not None:
             summary[key] = manifest[key]
     if metrics:
         summary["metrics"] = select_metrics(metrics, SUMMARY_METRICS)
-    scoreboard_path = run_directory / "scoreboard.json"
-    if scoreboard_path.exists():
-        summary["scoreboard"] = _scoreboard_summary(scoreboard_path)
+    if loaded["scoreboard"]:
+        summary["scoreboard"] = _scoreboard_summary(loaded["scoreboard"])
     return summary
 
 
@@ -146,7 +144,7 @@ def inspect_root(root: Path) -> dict[str, Any]:
             "artifactPaths": artifact_paths,
         }
 
-    root_issues = validate_config(root)
+    root_issues = [*validate_config(root), *validate_promoted_catalog(root)]
     experiments = [_experiment_summary(root, name) for name in _experiment_names(root)]
     experiment_issues = [
         ValidationIssue(str(issue["code"]), str(issue.get("path") or issue.get("target") or summary["path"]), str(issue["message"]))
@@ -174,16 +172,11 @@ def inspect_root(root: Path) -> dict[str, Any]:
 def next_actions(root: Path, data: dict[str, Any]) -> list[str]:
     state = data.get("state")
     if state == "missing-root":
-        return [f"forge init --root {root} --json"]
+        return [f"forge new <name> --root {root} --json"]
     if state == "no-experiments":
-        return [f"forge experiment new <name> --root {root} --json"]
+        return [f"forge new <name> --root {root} --json"]
     if state == "blocked":
-        return [f"repair reported artifacts under {root}", f"forge validate --root {root} --json", f"forge status --root {root} --json"]
+        return [f"repair reported artifacts under {root}", f"forge check --root {root} --json", f"forge status --root {root} --json"]
     experiments = data.get("experiments", [])
     first = experiments[0]["name"] if experiments else "<experiment>"
-    return [f"forge instructions orchestrate {first} --root {root} --json", f"forge run backtest {first} --root {root} --json"]
-
-
-def json_fingerprint(root: Path) -> str:
-    data = inspect_root(root)
-    return json.dumps(data, ensure_ascii=False, sort_keys=True)
+    return [f"forge show {first} --root {root} --json", f"forge backtest {first} --root {root} --json"]

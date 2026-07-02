@@ -13,8 +13,21 @@ from xenibe.analysis.registry import EVALUATORS
 from xenibe.artifacts.history import file_sha256
 from xenibe.artifacts.store import load_yaml, write_json, write_yaml
 from xenibe.candles import Candle
+from xenibe.execution import ebinex_candle_expiry_execution
 from xenibe.strategy import UnsupportedComponentError, compile_candidate_strategy, evaluate_candidate_decision
+from xenibe.strategy import candidate_fingerprint, evaluation_fingerprint, generate_candidates
 from xenibe.strategy.components import COMPONENT_PARAMETER_RULES
+
+
+def compact_records(run_dir: Path, kind: str) -> list[dict[str, object]]:
+    records = []
+    for line in (run_dir / "records.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("kind") == kind:
+            records.append(record["data"])
+    return records
 
 
 def candle(index: int, open_price: float, close_price: float, low: float | None = None, high: float | None = None) -> Candle:
@@ -75,7 +88,7 @@ def write_horizon_experiment(root: Path, name: str, candles: list[Candle], horiz
                 "volatility": [],
                 "structure": [],
                 "setup": [],
-                "trigger": [{"type": "momentum-close", "parameters": {"body-min-atr": [0.1], "side": ["call"]}}],
+                "trigger": [{"type": "momentum-close", "parameters": {"body-min-atr": [0.1]}}],
                 "confirmation": [],
                 "decision": [{"type": "weighted-score", "parameters": {"min-score": [1.0], "entry": ["next-candle-open"], "expiration-candles": [1]}}],
             },
@@ -164,7 +177,7 @@ class EvaluatorAndCompilerTests(unittest.TestCase):
     def test_evaluator_uses_only_closed_context_candles(self) -> None:
         closed = bullish_candles(15)
         future_pinbar = candle(16, 1.0, 1.02, low=0.1, high=1.04)
-        component = {"role": "trigger", "type": "pinbar-rejection", "parameters": {"side": "call", "min-wick-ratio": 0.8}}
+        component = {"role": "trigger", "type": "pinbar-rejection", "parameters": {"min-wick-ratio": 0.8}}
 
         closed_result = evaluate_component(AnalysisContext(closed, len(closed)), component)
         future_result = evaluate_component(AnalysisContext([*closed, future_pinbar], len(closed) + 1), component)
@@ -175,7 +188,7 @@ class EvaluatorAndCompilerTests(unittest.TestCase):
     def test_compiler_emits_signal_for_supported_candidate(self) -> None:
         candidate = {
             "components": [
-                {"role": "triggers", "type": "momentum-close", "parameters": {"side": "call", "body-min-atr": 0.1}},
+                {"role": "triggers", "type": "momentum-close", "parameters": {"body-min-atr": 0.1}},
                 {"role": "decision", "type": "weighted-score", "parameters": {"min-score": 1.0}},
             ]
         }
@@ -193,14 +206,14 @@ class EvaluatorAndCompilerTests(unittest.TestCase):
     def test_weighted_score_threshold_and_side_conflict(self) -> None:
         threshold_candidate = {
             "components": [
-                {"role": "trigger", "type": "momentum-close", "parameters": {"side": "call", "body-min-atr": 0.1}},
+                {"role": "trigger", "type": "momentum-close", "parameters": {"body-min-atr": 0.1}},
                 {"role": "volatility", "type": "atr-normalized", "parameters": {"period": 14, "min-ratio": 99.0, "max-ratio": 100.0}},
                 {"role": "decision", "type": "weighted-score", "parameters": {"min-score": 1.0}},
             ]
         }
         conflict_candidate = {
             "components": [
-                {"role": "trigger", "type": "momentum-close", "parameters": {"side": "call", "body-min-atr": 0.1}},
+                {"role": "trigger", "type": "momentum-close", "parameters": {"body-min-atr": 0.1}},
                 {"role": "structure", "type": "support-resistance-zone", "parameters": {"lookback": 20, "tolerance-atr": 0.6}},
                 {"role": "decision", "type": "weighted-score", "parameters": {"min-score": 0.1}},
             ]
@@ -212,8 +225,74 @@ class EvaluatorAndCompilerTests(unittest.TestCase):
         self.assertEqual(threshold["reason"], "score-below-threshold")
         self.assertEqual(conflict["reason"], "side-conflict")
 
+    def test_directional_triggers_derive_call_and_put_from_scenario(self) -> None:
+        bullish = bullish_candles(20)
+        bearish = [candle(index, 1.08 + index * 0.01, 1.0 + index * 0.01) for index in range(20)]
+        bullish_engulfing = [candle(0, 1.2, 1.0), candle(1, 0.95, 1.25)]
+        bearish_engulfing = [candle(0, 1.0, 1.2), candle(1, 1.25, 0.95)]
+        lower_pinbar = [*bullish[:19], candle(19, 1.0, 1.02, low=0.1, high=1.04)]
+        upper_pinbar = [*bullish[:19], candle(19, 1.02, 1.0, low=0.98, high=1.9)]
+
+        cases = [
+            (bullish, {"role": "trigger", "type": "momentum-close", "parameters": {"body-min-atr": 0.1}}, "call"),
+            (bearish, {"role": "trigger", "type": "momentum-close", "parameters": {"body-min-atr": 0.1}}, "put"),
+            (lower_pinbar, {"role": "trigger", "type": "pinbar-rejection", "parameters": {"min-wick-ratio": 0.8}}, "call"),
+            (upper_pinbar, {"role": "trigger", "type": "pinbar-rejection", "parameters": {"min-wick-ratio": 0.8}}, "put"),
+            (bullish_engulfing, {"role": "trigger", "type": "engulfing", "parameters": {"close-required": True}}, "call"),
+            (bearish_engulfing, {"role": "trigger", "type": "engulfing", "parameters": {"close-required": True}}, "put"),
+        ]
+
+        for candles, component, expected_side in cases:
+            with self.subTest(component=component["type"], expected_side=expected_side):
+                result = evaluate_component(AnalysisContext(candles, len(candles)), component)
+                self.assertTrue(result.passed)
+                self.assertEqual(result.side, expected_side)
+
+    def test_decision_requires_directional_vote(self) -> None:
+        candidate = {
+            "components": [
+                {"role": "volatility", "type": "atr-normalized", "parameters": {"period": 14, "min-ratio": 0.0, "max-ratio": 99.0}},
+                {"role": "decision", "type": "weighted-score", "parameters": {"min-score": 1.0}},
+            ]
+        }
+
+        decision = evaluate_candidate_decision(candidate, bullish_candles(20), 20)
+
+        self.assertEqual(decision["reason"], "no-side-vote")
+
 
 class CandidateSearchRunIntegrationTests(unittest.TestCase):
+    def test_ebinex_candidate_generation_ignores_configurable_expiration(self) -> None:
+        base_scope = {
+            "schema-version": 1,
+            "flow": ["context", "regime", "volatility", "structure", "setup", "trigger", "confirmation", "decision"],
+            "limits": {"max-candidates": 10, "max-seconds": 60, "batch-size": 10, "max-rounds": 1, "stagnation-rounds": 1},
+            "components": {
+                "context": [],
+                "regime": [],
+                "volatility": [],
+                "structure": [],
+                "setup": [],
+                "trigger": [{"type": "momentum-close", "parameters": {"body-min-atr": [0.1, 0.2]}}],
+                "confirmation": [],
+                "decision": [{"type": "weighted-score", "parameters": {"min-score": [1.0], "entry": ["next-candle-open"]}}],
+            },
+        }
+        expiring_scope = json.loads(json.dumps(base_scope))
+        expiring_scope["components"]["decision"][0]["parameters"]["expiration-candles"] = [1, 2, 3]
+        ignored = {"expiration-candles"}
+
+        base_candidates = generate_candidates(base_scope, base_scope["limits"], ignored_parameters=ignored)
+        expiring_candidates = generate_candidates(expiring_scope, expiring_scope["limits"], ignored_parameters=ignored)
+        context = {"executionSemantics": ebinex_candle_expiry_execution("M1")}
+
+        self.assertEqual(len(base_candidates), 2)
+        self.assertEqual(len(expiring_candidates), len(base_candidates))
+        self.assertEqual([candidate["candidateFingerprint"] for candidate in expiring_candidates], [candidate["candidateFingerprint"] for candidate in base_candidates])
+        self.assertNotIn("expiration-candles", expiring_candidates[0]["parameters"]["decision"])
+        self.assertEqual(candidate_fingerprint(expiring_candidates[0], ignored), candidate_fingerprint(base_candidates[0], ignored))
+        self.assertEqual(evaluation_fingerprint(expiring_candidates[0], context, ignored), evaluation_fingerprint(base_candidates[0], context, ignored))
+
     def test_search_scope_candidates_produce_distinct_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -258,7 +337,7 @@ class CandidateSearchRunIntegrationTests(unittest.TestCase):
                         "structure": [],
                         "setup": [],
                         "trigger": [
-                            {"type": "momentum-close", "parameters": {"body-min-atr": [0.1], "side": ["call", "put"]}},
+                            {"type": "momentum-close", "parameters": {"body-min-atr": [0.1, 0.6]}},
                         ],
                         "confirmation": [],
                         "decision": [{"type": "weighted-score", "parameters": {"min-score": [1.0], "entry": ["next-candle-open"], "expiration-candles": [1]}}],
@@ -271,12 +350,12 @@ class CandidateSearchRunIntegrationTests(unittest.TestCase):
                     handle.write(f"{item.time},{item.open},{item.high},{item.low},{item.close}\n")
 
             response = run_backtest(root, "robo-lksjdlkkk", "backtest", "bt-20260101-000000")
-            candidates_path = experiment / "runs" / "bt-20260101-000000" / "candidates.jsonl"
-            candidates = [json.loads(line) for line in candidates_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            run_dir = experiment / "runs" / "bt-20260101-000000"
+            candidates = compact_records(run_dir, "candidate")
             second_response = run_backtest(root, "robo-lksjdlkkk", "backtest", "bt-20260101-000001")
             second_run = experiment / "runs" / "bt-20260101-000001"
-            second_candidates = [json.loads(line) for line in (second_run / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-            second_scoreboard = json.loads((second_run / "scoreboard.json").read_text(encoding="utf-8"))
+            second_candidates = compact_records(second_run, "candidate")
+            second_scoreboard = json.loads((second_run / "run.json").read_text(encoding="utf-8"))["scoreboard"]
 
         self.assertEqual(response["runId"], "bt-20260101-000000")
         self.assertIn("max-drawdown", response["metrics"])
@@ -297,10 +376,11 @@ class CandidateSearchRunIntegrationTests(unittest.TestCase):
 
             response = run_backtest(root, "idx-m1-horizon-pass", "backtest", "bt-20260101-000000")
             run_dir = experiment / "runs" / "bt-20260101-000000"
-            candidates = [json.loads(line) for line in (run_dir / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-            horizons = [json.loads(line) for line in (run_dir / "horizons.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-            scoreboard = json.loads((run_dir / "scoreboard.json").read_text(encoding="utf-8"))
-            metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))["metrics"]
+            candidates = compact_records(run_dir, "candidate")
+            horizons = compact_records(run_dir, "horizon")
+            run_doc = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            scoreboard = run_doc["scoreboard"]
+            metrics = run_doc["metrics"]
             report = (run_dir / "report.md").read_text(encoding="utf-8")
 
         self.assertEqual(response["runId"], "bt-20260101-000000")
@@ -319,13 +399,14 @@ class CandidateSearchRunIntegrationTests(unittest.TestCase):
 
             response = run_backtest(root, "idx-m1-horizon-insufficient", "backtest", "bt-20260101-000000")
             run_dir = experiment / "runs" / "bt-20260101-000000"
-            candidates = [json.loads(line) for line in (run_dir / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            candidates = compact_records(run_dir, "candidate")
+            horizons = compact_records(run_dir, "horizon")
 
         self.assertEqual(response["runId"], "bt-20260101-000000")
         self.assertEqual(candidates[0]["classification"], "rejected")
         self.assertEqual(candidates[0]["reason"], "insufficient-primary-sample")
         self.assertEqual(candidates[0]["horizonValidation"]["status"], "skipped")
-        self.assertFalse((run_dir / "horizons.jsonl").exists())
+        self.assertEqual(horizons, [])
 
     def test_horizon_gate_failure_prevents_target_hit_winner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -334,8 +415,8 @@ class CandidateSearchRunIntegrationTests(unittest.TestCase):
 
             response = run_backtest(root, "idx-m1-horizon-fail", "backtest", "bt-20260101-000000")
             run_dir = experiment / "runs" / "bt-20260101-000000"
-            candidates = [json.loads(line) for line in (run_dir / "candidates.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-            horizons = [json.loads(line) for line in (run_dir / "horizons.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            candidates = compact_records(run_dir, "candidate")
+            horizons = compact_records(run_dir, "horizon")
 
         self.assertIsNone(response["metrics"]["winning-candidate"])
         self.assertEqual(candidates[0]["classification"], "rejected")

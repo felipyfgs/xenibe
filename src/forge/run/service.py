@@ -2,33 +2,33 @@ from __future__ import annotations
 
 import copy
 import csv
-import json
 from dataclasses import dataclass
 from datetime import timedelta
 from math import ceil
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from xenibe.artifacts.history import file_sha256, parse_datetime
 from xenibe.artifacts.naming import is_run_id
 from xenibe.artifacts.store import (
     ValidationIssue,
-    append_jsonl,
-    complete_run,
-    ensure_run_artifacts,
     experiment_dir,
     load_experiment,
     load_json,
+    load_run_view,
     load_yaml,
     make_run_id,
+    utc_now,
     validate_experiment_dir,
     validate_run_dir,
-    write_json,
+    write_compact_run_artifacts,
 )
 from xenibe.artifacts.schemas import DEFAULT_PROVIDER, DEFAULT_REPORT
 from xenibe.backtest import DEFAULT_BACKTEST_PAYOUT, run_m1_backtest
 from xenibe.candles import Candle
-from xenibe.metrics.summary import METRIC_NET_PROFIT, calculate_trade_metrics
+from xenibe.execution import ebinex_candle_expiry_execution
+from xenibe.metrics.summary import METRIC_NET_PROFIT, calculate_backtest_metrics
 from xenibe.risk import DEFAULT_RISK
 from xenibe.strategy import UnsupportedComponentError, build_scoreboard, candidate_rank_key, classify_candidate, compile_candidate_strategy, evaluation_fingerprint, generate_candidates, resolve_limits, target_satisfied
 
@@ -66,15 +66,9 @@ class SearchResult:
     best_record: dict[str, Any] | None
     detail_result: dict[str, Any] | None
     search_state: str
-
-
-def default_candles() -> list[Candle]:
-    return [
-        Candle("2026-01-01T00:00:00Z", 1.0, 1.2, 0.9, 1.1),
-        Candle("2026-01-01T00:01:00Z", 1.1, 1.2, 1.0, 1.0),
-        Candle("2026-01-01T00:02:00Z", 1.0, 1.2, 0.9, 1.15),
-        Candle("2026-01-01T00:03:00Z", 1.15, 1.16, 0.95, 1.0),
-    ]
+    elapsed_seconds: float
+    evaluated_candidate_count: int
+    timed_out: bool
 
 
 def _read_candle_csv(path: Path) -> list[Candle]:
@@ -193,29 +187,34 @@ def _prior_evaluation_index(experiment_path: Path) -> dict[str, dict[str, Any]]:
     if not runs.exists():
         return index
     for run_dir in sorted(path for path in runs.iterdir() if path.is_dir()):
-        candidates = run_dir / "candidates.jsonl"
-        if not candidates.exists():
-            continue
-        with candidates.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                fingerprint = record.get("evaluationFingerprint")
-                if isinstance(fingerprint, str) and fingerprint not in index:
-                    index[fingerprint] = {
-                        "runId": run_dir.name,
-                        "candidateId": record.get("candidateId"),
-                        "candidateFingerprint": record.get("candidateFingerprint"),
-                    }
+        view = load_run_view(run_dir)
+        for record in view.get("recordsByKind", {}).get("candidate", []):
+            fingerprint = record.get("evaluationFingerprint")
+            if isinstance(fingerprint, str) and fingerprint not in index:
+                index[fingerprint] = {
+                    "runId": run_dir.name,
+                    "candidateId": record.get("candidateId"),
+                    "candidateFingerprint": record.get("candidateFingerprint"),
+                }
     return index
 
 
+def _execution_semantics(configs: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    ingest_data = configs["ingest.yml"].get("data", {})
+    if not isinstance(ingest_data, dict) or ingest_data.get("provider") != "ebinex":
+        return None
+    return ebinex_candle_expiry_execution(str(ingest_data.get("timeframe", "")))
+
+
+def _ignored_candidate_parameters(configs: dict[str, dict[str, Any]]) -> set[str]:
+    ingest_data = configs["ingest.yml"].get("data", {})
+    if isinstance(ingest_data, dict) and ingest_data.get("provider") == "ebinex":
+        return {"expiration-candles"}
+    return set()
+
+
 def _evaluation_context(configs: dict[str, dict[str, Any]], risk: dict[str, Any], mode: str, history: dict[str, Any]) -> dict[str, Any]:
-    return {
+    context = {
         "mode": mode,
         "ingest": configs["ingest.yml"],
         "history": history,
@@ -223,6 +222,10 @@ def _evaluation_context(configs: dict[str, dict[str, Any]], risk: dict[str, Any]
         "target": configs["experiment.yml"]["target"],
         "risk": risk,
     }
+    semantics = _execution_semantics(configs)
+    if semantics is not None:
+        context["executionSemantics"] = semantics
+    return context
 
 
 def _candidate_key(record: dict[str, Any] | None, target_metric: str) -> tuple[float, float, float, float]:
@@ -230,43 +233,42 @@ def _candidate_key(record: dict[str, Any] | None, target_metric: str) -> tuple[f
 
 
 def _resolve_run_id(mode: str, run_id: str | None) -> dict[str, Any] | str:
-    if mode != "backtest":
+    prefixes = {"backtest": "bt", "simulate": "sim"}
+    if mode not in prefixes:
         return {
             "error": "invalid-artifact",
-            "message": "run mode must be backtest",
-            "next": ["forge run backtest <experiment> --json"],
+            "message": "run mode must be backtest or simulate",
+            "next": ["forge backtest <experiment> --mode backtest --json"],
         }
-    resolved_run_id = run_id or make_run_id("bt")
+    prefix = prefixes[mode]
+    resolved_run_id = run_id or make_run_id(prefix)
     if not is_run_id(resolved_run_id):
         return {
             "error": "invalid-name",
-            "message": "run id must use bt-YYYYMMDD-HHMMSS",
+            "message": f"run id must use {prefix}-YYYYMMDD-HHMMSS",
             "next": ["omit --run-id to generate one"],
         }
-    if not resolved_run_id.startswith("bt-"):
+    if not resolved_run_id.startswith(f"{prefix}-"):
         return {
             "error": "invalid-name",
-            "message": "backtest run IDs must use the bt- prefix",
+            "message": f"{mode} run IDs must use the {prefix}- prefix",
             "next": ["omit --run-id to generate one"],
         }
     return resolved_run_id
 
 
-def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict[str, Any], allow_synthetic: bool) -> CandleLoad | dict[str, Any]:
+def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict[str, Any]) -> CandleLoad | dict[str, Any]:
     candles = load_history_candles(base, ingest)
     if candles:
         return CandleLoad(candles, "configured-history")
     source = configured_history_source(base, ingest)
     history_files = configured_history_files(source)
-    if allow_synthetic:
-        return CandleLoad(default_candles(), "synthetic-default")
     ingest_data = ingest.get("data", {})
     return {
         "error": "missing-artifact",
-        "message": f"no parseable candle data found at {source}; pass --allow-synthetic to use default synthetic candles",
+        "message": f"no parseable candle data found at {source}; download or configure real history before running backtest",
         "next": [
-            f"forge history download {ingest_data.get('asset', '<asset>')} --experiment {experiment} --timeframe {ingest_data.get('timeframe', 'M1')} --from {ingest_data.get('from', '<from>')} --to {ingest_data.get('to', '<to>')} --root {root} --json",
-            f"forge run backtest {experiment} --allow-synthetic --root {root} --json",
+            f"forge data download {ingest_data.get('asset', '<asset>')} --experiment {experiment} --timeframe {ingest_data.get('timeframe', 'M1')} --from {ingest_data.get('from', '<from>')} --to {ingest_data.get('to', '<to>')} --root {root} --json",
         ],
         "issues": [
             {
@@ -278,7 +280,7 @@ def _load_candles_or_error(root: Path, experiment: str, base: Path, ingest: dict
     }
 
 
-def _load_run_setup(root: Path, experiment: str, allow_synthetic: bool) -> RunSetup | dict[str, Any]:
+def _load_run_setup(root: Path, experiment: str) -> RunSetup | dict[str, Any]:
     base = experiment_dir(root, experiment)
     issues = validate_experiment_dir(base)
     if issues:
@@ -295,15 +297,13 @@ def _load_run_setup(root: Path, experiment: str, allow_synthetic: bool) -> RunSe
         issue = ValidationIssue("invalid-yaml", str(base), str(exc))
         return {"error": "invalid-yaml", "message": "optional config validation failed", "issues": issues_payload([issue])}
     resolved_limits = resolve_limits(search_scope)
-    candidates = generate_candidates(search_scope, resolved_limits)
+    candidates = generate_candidates(search_scope, resolved_limits, ignored_parameters=_ignored_candidate_parameters(configs))
     history_source = configured_history_source(base, configs["ingest.yml"])
-    candle_load = _load_candles_or_error(root, experiment, base, configs["ingest.yml"], allow_synthetic)
+    candle_load = _load_candles_or_error(root, experiment, base, configs["ingest.yml"])
     if isinstance(candle_load, dict):
         return candle_load
     history_context = history_data_context(history_source, len(candle_load.candles))
     history_context["dataSource"] = candle_load.source_kind
-    if candle_load.source_kind == "synthetic-default":
-        history_context["synthetic"] = True
     return RunSetup(base, configs, search_scope, risk, provider, report_config, resolved_limits, candidates, candle_load.candles, history_context)
 
 
@@ -320,7 +320,7 @@ def _duplicate_record(candidate: dict[str, Any], prior: dict[str, Any]) -> dict[
 
 
 def _empty_backtest_result() -> dict[str, Any]:
-    return {"signals": [], "orders": [], "trades": [], "blocks": [], "equity": [], "metrics": calculate_trade_metrics([])}
+    return {"signals": [], "orders": [], "trades": [], "blocks": [], "equity": [], "metrics": calculate_backtest_metrics([], [])}
 
 
 def _horizon_config(search_scope: dict[str, Any]) -> dict[str, Any] | None:
@@ -529,6 +529,9 @@ def _update_search_state(stop: bool, stagnant_rounds: int, stagnation_limit: int
 
 
 def _run_candidate_search(setup: RunSetup, mode: str, resolved_run_id: str) -> SearchResult:
+    started_at = monotonic()
+    max_seconds_value = setup.resolved_limits.get("max-seconds")
+    max_seconds = float(max_seconds_value) if isinstance(max_seconds_value, (int, float)) and not isinstance(max_seconds_value, bool) else None
     target = setup.configs["experiment.yml"]["target"]
     target_metric = str(target["metric"])
     tested: list[dict[str, Any]] = []
@@ -545,17 +548,28 @@ def _run_candidate_search(setup: RunSetup, mode: str, resolved_run_id: str) -> S
     stagnation_limit = max(1, int(setup.resolved_limits.get("stagnation-rounds", 1)))
     stop_on_target = bool(setup.configs["experiment.yml"].get("stop-on-target", True))
     search_state = "limits-exhausted"
+
+    def timed_out() -> bool:
+        return max_seconds is not None and monotonic() - started_at >= max_seconds
+
     cursor = 0
     round_number = 0
     stagnant_rounds = 0
     stop = False
     while cursor < len(setup.candidates) and round_number < max_rounds and not stop:
+        if timed_out():
+            search_state = "timeout"
+            break
         round_number += 1
         batch = setup.candidates[cursor : cursor + batch_size]
         cursor += len(batch)
         round_candidate_ids: list[str] = []
         round_start_key = _candidate_key(best_record, target_metric)
         for candidate in batch:
+            if timed_out():
+                search_state = "timeout"
+                stop = True
+                break
             candidate["evaluationFingerprint"] = evaluation_fingerprint(candidate, evaluation_context)
             round_candidate_ids.append(candidate["candidateId"])
             prior = prior_index.get(candidate["evaluationFingerprint"])
@@ -570,7 +584,6 @@ def _run_candidate_search(setup: RunSetup, mode: str, resolved_run_id: str) -> S
                 "candidateFingerprint": record.get("candidateFingerprint"),
             }
             if record["classification"] == "winner":
-                record["status"] = "target-hit"
                 if winning_candidate is None:
                     winning_candidate = record["candidateId"]
                 detail_result = result
@@ -585,11 +598,12 @@ def _run_candidate_search(setup: RunSetup, mode: str, resolved_run_id: str) -> S
 
         round_end_key = _candidate_key(best_record, target_metric)
         stagnant_rounds = 0 if round_end_key > round_start_key else stagnant_rounds + 1
-        search_state, stop = _update_search_state(stop, stagnant_rounds, stagnation_limit, round_number, max_rounds, cursor, len(setup.candidates))
+        if search_state != "timeout":
+            search_state, stop = _update_search_state(stop, stagnant_rounds, stagnation_limit, round_number, max_rounds, cursor, len(setup.candidates))
         round_records.append(
             {
                 "round": round_number,
-                "status": "completed",
+                "status": "timeout" if search_state == "timeout" else "completed",
                 "candidateIds": round_candidate_ids,
                 "winnerCandidate": winning_candidate,
                 "bestCandidate": best_record.get("candidateId") if best_record else None,
@@ -604,11 +618,13 @@ def _run_candidate_search(setup: RunSetup, mode: str, resolved_run_id: str) -> S
                 "scoreboard": "scoreboard.json",
             }
         )
-    return SearchResult(tested, round_records, reflection_records, horizon_records, winning_candidate, best_record, detail_result, search_state)
+    elapsed_seconds = round(monotonic() - started_at, 6)
+    evaluated_candidate_count = sum(1 for candidate in tested if candidate.get("status") == "tested")
+    return SearchResult(tested, round_records, reflection_records, horizon_records, winning_candidate, best_record, detail_result, search_state, elapsed_seconds, evaluated_candidate_count, search_state == "timeout")
 
 
 def _final_metrics(result: SearchResult) -> dict[str, Any]:
-    metrics = dict(result.best_record["metrics"]) if result.best_record else calculate_trade_metrics([])
+    metrics = dict(result.best_record["metrics"]) if result.best_record else calculate_backtest_metrics([], [])
     metrics["winning-candidate"] = result.winning_candidate
     metrics["best-candidate"] = result.best_record.get("candidateId") if result.best_record else None
     metrics["skipped-duplicates"] = sum(1 for candidate in result.tested if candidate.get("status") == "skipped-duplicate")
@@ -618,104 +634,148 @@ def _final_metrics(result: SearchResult) -> dict[str, Any]:
 
 
 def _execution_context(setup: RunSetup) -> dict[str, Any]:
-    return {
+    max_seconds = setup.resolved_limits.get("max-seconds")
+    context = {
         "payout": DEFAULT_BACKTEST_PAYOUT,
         "payoutSource": "fixed-default",
-        "maxSeconds": setup.resolved_limits.get("max-seconds"),
-        "maxSecondsEnforced": False,
+        "maxSeconds": max_seconds,
+        "maxSecondsEnforced": isinstance(max_seconds, (int, float)) and not isinstance(max_seconds, bool),
         "dataSource": setup.history_context.get("dataSource"),
     }
+    semantics = _execution_semantics(setup.configs)
+    if semantics is not None:
+        context["semantics"] = semantics
+    return context
 
 
 def _run_limitations(setup: RunSetup) -> list[dict[str, Any]]:
-    limitations = [
+    return [
         {
             "code": "fixed-payout",
             "message": f"Backtests currently use fixed payout {DEFAULT_BACKTEST_PAYOUT}.",
         },
-        {
-            "code": "max-seconds-not-enforced",
-            "message": "search-scope limits.max-seconds is recorded but not enforced.",
-        },
     ]
-    if setup.history_context.get("dataSource") == "synthetic-default":
-        limitations.append(
-            {
-                "code": "synthetic-default-candles",
-                "message": "No configured history files were found; default synthetic candles were used.",
-            }
-        )
-    return limitations
 
 
 def _run_payload(experiment: str, resolved_run_id: str, directory: Path, metrics: dict[str, Any], result: SearchResult, setup: RunSetup) -> dict[str, Any]:
     return {
         "experiment": experiment,
         "runId": resolved_run_id,
+        "subject": "candidate-search",
         "path": str(directory),
         "metrics": metrics,
         "searchState": result.search_state,
+        "search": {
+            "timedOut": result.timed_out,
+            "elapsedSeconds": result.elapsed_seconds,
+            "evaluatedCandidateCount": result.evaluated_candidate_count,
+        },
         "bestCandidate": result.best_record.get("candidateId") if result.best_record else None,
         "execution": _execution_context(setup),
         "limitations": _run_limitations(setup),
     }
 
 
+def _compact_records(result: SearchResult) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+
+    def add(kind: str, data: dict[str, Any]) -> None:
+        records.append({"seq": len(records) + 1, "kind": kind, "data": data})
+
+    for candidate in result.tested:
+        add("candidate", candidate)
+    for record in result.horizon_records:
+        add("horizon", record)
+    for record in result.round_records:
+        add("round", record)
+    for record in result.reflection_records:
+        add("reflection", record)
+    if result.detail_result is not None:
+        for name, kind in (
+            ("signals", "signal"),
+            ("orders", "order"),
+            ("trades", "trade"),
+            ("blocks", "block"),
+            ("equity", "equity"),
+        ):
+            for record in result.detail_result[name]:
+                add(kind, record)
+    return records
+
+
 def _persist_run(root: Path, experiment: str, mode: str, resolved_run_id: str, setup: RunSetup, result: SearchResult, final_metrics: dict[str, Any]) -> None:
     directory = run_dir(root, experiment, resolved_run_id)
-    ensure_run_artifacts(
-        directory,
-        resolved_run_id,
-        experiment,
-        mode,
-        {
-            "experiment": setup.configs["experiment.yml"],
-            "ingest": setup.configs["ingest.yml"],
-            "search-scope": setup.search_scope,
-            "risk": setup.risk,
-            "provider": setup.provider,
-            "report": setup.report_config,
-        },
-        {
-            "resolvedLimits": setup.resolved_limits,
-            "candidateCount": len(setup.candidates),
-            "batchCount": len(result.round_records),
-            "history": setup.history_context,
-            "execution": _execution_context(setup),
-            "limitations": _run_limitations(setup),
-            "horizonValidation": setup.search_scope.get("horizon-validation"),
-            "searchState": result.search_state,
-        },
-    )
-    for candidate in result.tested:
-        append_jsonl(directory / "candidates.jsonl", candidate)
-    for record in result.horizon_records:
-        append_jsonl(directory / "horizons.jsonl", record)
     target_metric = str(setup.configs["experiment.yml"]["target"]["metric"])
-    write_json(directory / "scoreboard.json", build_scoreboard(resolved_run_id, result.tested, target_metric))
-    for record in result.round_records:
-        append_jsonl(directory / "rounds.jsonl", record)
-    for record in result.reflection_records:
-        append_jsonl(directory / "reflections.jsonl", record)
-    if result.detail_result is not None:
-        for name in ("signals", "orders", "trades", "blocks", "equity"):
-            for record in result.detail_result[name]:
-                append_jsonl(directory / f"{name}.jsonl", record)
-    manifest = load_json(directory / "manifest.json")
-    manifest["searchState"] = result.search_state
-    manifest["winnerCandidate"] = result.winning_candidate
-    manifest["bestCandidate"] = result.best_record.get("candidateId") if result.best_record else None
-    manifest["skippedDuplicates"] = final_metrics["skipped-duplicates"]
-    write_json(directory / "manifest.json", manifest)
-    complete_run(directory, final_metrics, render_run_report(experiment, resolved_run_id, final_metrics, manifest))
+    created_at = utc_now()
+    completed_at = utc_now()
+    execution = _execution_context(setup)
+    limitations = _run_limitations(setup)
+    search = {
+        "timedOut": result.timed_out,
+        "elapsedSeconds": result.elapsed_seconds,
+        "evaluatedCandidateCount": result.evaluated_candidate_count,
+    }
+    snapshot = {
+        "experiment": setup.configs["experiment.yml"],
+        "ingest": setup.configs["ingest.yml"],
+        "search-scope": setup.search_scope,
+        "risk": setup.risk,
+        "provider": setup.provider,
+        "report": setup.report_config,
+    }
+    inputs = {
+        "runId": resolved_run_id,
+        "subject": "candidate-search",
+        "resolvedLimits": setup.resolved_limits,
+        "candidateCount": len(setup.candidates),
+        "batchCount": len(result.round_records),
+        "history": setup.history_context,
+        "execution": execution,
+        "limitations": limitations,
+        "horizonValidation": setup.search_scope.get("horizon-validation"),
+        "searchState": result.search_state,
+        "search": search,
+    }
+    scoreboard = build_scoreboard(resolved_run_id, result.tested, target_metric)
+    manifest = {
+        "runId": resolved_run_id,
+        "experiment": experiment,
+        "mode": mode,
+        "subject": "candidate-search",
+        "status": "completed",
+        "createdAt": created_at,
+        "completedAt": completed_at,
+        "searchState": result.search_state,
+        "search": search,
+        "execution": execution,
+        "winnerCandidate": result.winning_candidate,
+        "bestCandidate": result.best_record.get("candidateId") if result.best_record else None,
+        "skippedDuplicates": final_metrics["skipped-duplicates"],
+    }
+    run_doc = {
+        **manifest,
+        "configSnapshot": snapshot,
+        "inputs": inputs,
+        "metrics": final_metrics,
+        "scoreboard": scoreboard,
+        "limitations": limitations,
+        "promotion": {
+            "eligible": result.winning_candidate is not None,
+            "candidate": result.best_record if result.best_record and result.best_record.get("classification") == "winner" else None,
+        },
+        "recordCounts": {},
+    }
+    records = _compact_records(result)
+    report = render_run_report(experiment, resolved_run_id, final_metrics, manifest)
+    write_compact_run_artifacts(directory, run_doc, records, report)
 
 
-def run_backtest(root: Path, experiment: str, mode: str, run_id: str | None, dry_run: bool = False, allow_synthetic: bool = False) -> dict[str, Any]:
+def run_backtest(root: Path, experiment: str, mode: str, run_id: str | None, dry_run: bool = False) -> dict[str, Any]:
     resolved = _resolve_run_id(mode, run_id)
     if isinstance(resolved, dict):
         return resolved
     resolved_run_id = resolved
-    setup = _load_run_setup(root, experiment, allow_synthetic)
+    setup = _load_run_setup(root, experiment)
     if isinstance(setup, dict):
         return setup
     result = _run_candidate_search(setup, mode, resolved_run_id)
@@ -723,9 +783,9 @@ def run_backtest(root: Path, experiment: str, mode: str, run_id: str | None, dry
     directory = run_dir(root, experiment, resolved_run_id)
     payload = _run_payload(experiment, resolved_run_id, directory, final_metrics, result, setup)
     if dry_run:
-        payload["plannedActions"] = ["persist resolved limits", "create run artifacts", "append candidate batches, round, and reflection records", "write scoreboard, metrics, and report"]
+        payload["plannedActions"] = ["persist compact run.json", "write typed records.jsonl trail", "write report.md"]
         if _horizon_config(setup.search_scope) is not None:
-            payload["plannedActions"].extend(["evaluate primary-window candidates", "evaluate configured horizon windows", "write horizons.jsonl"])
+            payload["plannedActions"].extend(["evaluate primary-window candidates", "evaluate configured horizon windows", "write horizon records"])
         return payload
     _persist_run(root, experiment, mode, resolved_run_id, setup, result, final_metrics)
     return payload
@@ -740,7 +800,18 @@ def show_run(root: Path, experiment: str, run_id: str) -> dict[str, Any]:
     loaded = completed_run(root, experiment, run_id)
     if "error" in loaded:
         return loaded
-    return {"experiment": experiment, "runId": run_id, "path": loaded["path"], "metrics": loaded["metrics"], "manifest": loaded["manifest"]}
+    return {
+        "experiment": experiment,
+        "runId": run_id,
+        "path": loaded["path"],
+        "layout": loaded["layout"],
+        "metrics": loaded["metrics"],
+        "manifest": loaded["manifest"],
+        "scoreboard": loaded["scoreboard"],
+        "recordCounts": loaded["recordCounts"],
+        "duplicateOnly": loaded["duplicateOnly"],
+        "promotionEligible": loaded["promotionEligible"],
+    }
 
 
 def validate_run(root: Path, experiment: str, run_id: str) -> dict[str, Any]:

@@ -26,7 +26,8 @@ def fingerprint_value(value: Any) -> str:
     return hashlib.sha256(_fingerprint_payload(value).encode("utf-8")).hexdigest()
 
 
-def normalized_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+def normalized_candidate(candidate: dict[str, Any], ignored_parameters: set[str] | None = None) -> dict[str, Any]:
+    ignored = ignored_parameters or set()
     stage_order = {stage: index for index, stage in enumerate(CANONICAL_SEARCH_FLOW)}
     components = sorted(
         candidate.get("components", []),
@@ -42,28 +43,29 @@ def normalized_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
             {
                 "stage": canonical_role(component.get("role", "")),
                 "type": str(component.get("type", "")),
-                "parameters": component.get("parameters", {}),
+                "parameters": {key: value for key, value in component.get("parameters", {}).items() if key not in ignored},
             }
             for component in components
         ],
     }
 
 
-def candidate_fingerprint(candidate: dict[str, Any]) -> str:
-    return fingerprint_value(normalized_candidate(candidate))
+def candidate_fingerprint(candidate: dict[str, Any], ignored_parameters: set[str] | None = None) -> str:
+    return fingerprint_value(normalized_candidate(candidate, ignored_parameters))
 
 
-def evaluation_fingerprint(candidate: dict[str, Any], context: dict[str, Any]) -> str:
+def evaluation_fingerprint(candidate: dict[str, Any], context: dict[str, Any], ignored_parameters: set[str] | None = None) -> str:
     return fingerprint_value(
         {
-            "candidateFingerprint": candidate.get("candidateFingerprint") or candidate_fingerprint(candidate),
+            "candidateFingerprint": candidate.get("candidateFingerprint") or candidate_fingerprint(candidate, ignored_parameters),
             "context": context,
         }
     )
 
 
-def generate_candidates(search_scope: dict[str, Any], limits: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def generate_candidates(search_scope: dict[str, Any], limits: dict[str, Any] | None = None, ignored_parameters: set[str] | None = None) -> list[dict[str, Any]]:
     resolved = limits or resolve_limits(search_scope)
+    ignored = ignored_parameters or set()
     max_candidates = int(resolved.get("max-candidates", 25))
     components = search_scope.get("components", {})
     groups: list[list[dict[str, Any]]] = []
@@ -74,8 +76,8 @@ def generate_candidates(search_scope: dict[str, Any], limits: dict[str, Any] | N
         role_items = []
         for item in items:
             parameters = item.get("parameters", {})
-            keys = list(parameters)
-            values = [value if isinstance(value, list) else [value] for value in parameters.values()]
+            keys = [key for key in parameters if key not in ignored]
+            values = [parameters[key] if isinstance(parameters[key], list) else [parameters[key]] for key in keys]
             combinations = [dict(zip(keys, values_item, strict=False)) for values_item in product(*values)] or [{}]
             for params in combinations:
                 role_items.append({"role": role, "type": item.get("type", item.get("role", role)), "parameters": params})
@@ -92,7 +94,7 @@ def generate_candidates(search_scope: dict[str, Any], limits: dict[str, Any] | N
             "status": "pending",
             "metrics": {},
         }
-        candidate["candidateFingerprint"] = candidate_fingerprint(candidate)
+        candidate["candidateFingerprint"] = candidate_fingerprint(candidate, ignored)
         candidates.append(candidate)
         if len(candidates) >= max_candidates:
             break
@@ -130,13 +132,6 @@ def candidate_rank_key(record: dict[str, Any] | None, target_metric: str) -> tup
 
 def candidate_is_rankable(record: dict[str, Any]) -> bool:
     return record.get("classification") != "skipped" and record.get("status") != "skipped-duplicate"
-
-
-def candidate_allows_target_hit(record: dict[str, Any] | None) -> bool:
-    if record is None:
-        return False
-    horizon = record.get("horizonValidation")
-    return not isinstance(horizon, dict) or horizon.get("status") == "passed"
 
 
 def rank_candidates(candidates: list[dict[str, Any]], target_metric: str) -> list[dict[str, Any]]:

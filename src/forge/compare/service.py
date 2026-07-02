@@ -19,8 +19,17 @@ def compare_runs(root: Path, experiment: str, run_ids: list[str]) -> dict[str, A
         if "error" in loaded:
             loaded["runId"] = run_id
             return loaded
-        rows.append({"runId": run_id, **select_metrics(loaded["metrics"], COMPARISON_METRICS)})
-    rows.sort(key=lambda row: (float(row.get(METRIC_NET_PROFIT) or 0.0), float(row.get(METRIC_WIN_RATE) or 0.0)), reverse=True)
+        rows.append(
+            {
+                "runId": run_id,
+                "bestEligible": bool(loaded.get("bestEligible")),
+                "duplicateOnly": bool(loaded.get("duplicateOnly")),
+                "promotionEligible": bool(loaded.get("promotionEligible")),
+                **select_metrics(loaded["metrics"], COMPARISON_METRICS),
+            }
+        )
+    rows.sort(key=lambda row: (bool(row.get("bestEligible")), float(row.get(METRIC_NET_PROFIT) or 0.0), float(row.get(METRIC_WIN_RATE) or 0.0)), reverse=True)
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank
-    return {"experiment": experiment, "runs": rows, "bestRunId": rows[0]["runId"] if rows else None}
+    best = next((row for row in rows if row.get("bestEligible")), None)
+    return {"experiment": experiment, "runs": rows, "bestRunId": best["runId"] if best else None}
